@@ -215,8 +215,9 @@ main {
 .mark.on { color: var(--red); }
 .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--red); flex: none; margin-left: -11px; margin-right: -3px; }
 
-/* verbos: buscador y cabecera del verbo fijos arriba */
-.vb-sticky { position: sticky; top: 0; z-index: 4; background: var(--bg); margin: calc(-10px - var(--safe-t)) -16px 0; padding: calc(10px + var(--safe-t)) 16px 0; }
+/* buscador y cabecera fijos arriba (verbos y favoritos) */
+.vb-sticky, .fv-sticky { position: sticky; top: 0; z-index: 4; background: var(--bg); margin: calc(-10px - var(--safe-t)) -16px 0; padding: calc(10px + var(--safe-t)) 16px 0; }
 .vb-sticky .input-card { margin-bottom: 8px; }
 .vb-card { margin-bottom: 8px; padding: 10px 14px; }
 .vb-card .vb-link { margin-top: 6px; }
+.fv-sticky .count { margin-bottom: 0; padding-bottom: 6px; }
