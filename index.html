@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="Vai Vai">
+  <meta name="theme-color" content="#fbf7ef">
+  <title>Vai Vai</title>
+  <link rel="manifest" href="manifest.json">
+  <link rel="apple-touch-icon" href="icons/icon-180.png">
+  <link rel="icon" href="icons/icon-192.png">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="top">
+    <h1>Vai Vai <span class="book">📖</span></h1>
+    <span id="netState" class="net" hidden>Sin conexión</span>
+  </header>
+
+  <main>
+    <!-- ============ TRADUCIR ============ -->
+    <section id="tab-tr" class="tab active">
+      <div class="langbar">
+        <span id="langFrom" class="lang">🇪🇸 Español</span>
+        <button id="swap" class="swap" aria-label="Cambiar idioma">⇄</button>
+        <span id="langTo" class="lang">🇮🇹 Italiano</span>
+      </div>
+
+      <div class="card input-card">
+        <textarea id="trInput" rows="2" placeholder="Escribe una palabra o una frase…" autocapitalize="none" autocomplete="off" autocorrect="off" spellcheck="false" enterkeyhint="go"></textarea>
+        <div class="card-tools">
+          <button id="trClear" class="icon-btn" aria-label="Borrar" hidden>✕</button>
+          <button id="trMic" class="icon-btn" aria-label="Dictar">🎤</button>
+          <button id="trSpeakSrc" class="icon-btn" aria-label="Escuchar">🔊</button>
+          <span class="grow"></span>
+          <button id="trGo" class="btn small">Traducir</button>
+        </div>
+        <ul id="suggest" class="suggest"></ul>
+      </div>
+
+      <div id="trResult" class="card result-card" hidden>
+        <div class="result-head">
+          <div class="result-main" id="resMain"></div>
+          <button id="resSpeak" class="icon-btn" aria-label="Escuchar">🔊</button>
+          <button id="resStar" class="star" aria-label="Favorito">☆</button>
+        </div>
+        <div id="resNote" class="note"></div>
+        <div id="resAlts" class="chips"></div>
+        <button id="resVerb" class="link" hidden></button>
+        <div id="resSource" class="source"></div>
+      </div>
+
+      <div class="section-title" id="histTitle" hidden>Recientes <button id="histClear" class="link small">Borrar</button></div>
+      <ul id="histList" class="plain-list"></ul>
+    </section>
+
+    <!-- ============ VERBOS ============ -->
+    <section id="tab-vb" class="tab">
+      <div class="card input-card">
+        <input id="vbInput" type="search" placeholder="Verbo italiano (parlare) o español (hablar)" autocapitalize="none" autocomplete="off" autocorrect="off" spellcheck="false" enterkeyhint="search">
+        <ul id="vbSuggest" class="suggest"></ul>
+      </div>
+      <div id="vbOut"></div>
+      <div id="vbEmpty" class="empty">
+        <p>Escribe un verbo en italiano (<b>parlare</b>, <b>andare</b>, <b>finire</b>…) o en español (<b>hablar</b>) para ver sus tiempos.</p>
+        <p class="muted">Las formas irregulares salen resaltadas.</p>
+        <div class="chips center" id="vbExamples"></div>
+      </div>
+    </section>
+
+    <!-- ============ FAVORITOS ============ -->
+    <section id="tab-fv" class="tab">
+      <div class="seg" id="fvSort">
+        <button data-v="new" class="on">Recientes</button>
+        <button data-v="old">Antiguas</button>
+        <button data-v="az">A–Z</button>
+      </div>
+      <input id="fvSearch" class="search" type="search" placeholder="Buscar en favoritos" autocapitalize="none" autocomplete="off" autocorrect="off">
+      <div class="fv-count" id="fvCount"></div>
+      <ul id="fvList" class="fv-list"></ul>
+      <div id="fvEmpty" class="empty" hidden>
+        <p>Aún no tienes favoritos.</p>
+        <p class="muted">Traduce una palabra y toca la estrella ☆ para guardarla.</p>
+      </div>
+      <p class="muted center hint" id="fvHint" hidden>Desliza a la izquierda para borrar.</p>
+      <div class="backup">
+        <button id="exportBtn" class="link small">Exportar copia</button>
+        <span class="muted">·</span>
+        <label class="link small">Importar copia<input id="importFile" type="file" accept="application/json,.json" hidden></label>
+      </div>
+    </section>
+
+    <!-- ============ EJERCICIOS ============ -->
+    <section id="tab-ex" class="tab">
+      <div id="exSetup">
+        <div class="card">
+          <div class="field-label">Palabras por serie</div>
+          <div class="seg" id="exN">
+            <button data-v="5">5</button><button data-v="10">10</button><button data-v="15">15</button>
+          </div>
+          <div class="field-label">¿Cuáles?</div>
+          <div class="seg" id="exOrder">
+            <button data-v="new">Recientes</button><button data-v="old">Antiguas</button><button data-v="rnd">Aleatorias</button>
+          </div>
+          <div class="field-label">Dirección</div>
+          <div class="seg" id="exDir">
+            <button data-v="es">🇪🇸 → 🇮🇹</button><button data-v="it">🇮🇹 → 🇪🇸</button><button data-v="mix">Mezcla</button>
+          </div>
+          <div class="field-label">Responder</div>
+          <div class="seg" id="exMode">
+            <button data-v="write">⌨️ Escribiendo</button><button data-v="speak">🎤 Hablando</button>
+          </div>
+        </div>
+        <button id="exStart" class="btn big">Empezar</button>
+        <p id="exInfo" class="muted center"></p>
+        <p id="exLast" class="muted center"></p>
+      </div>
+
+      <div id="exRun" hidden>
+        <div class="ex-top">
+          <button id="exQuit" class="link">✕ Salir</button>
+          <span id="exProg" class="ex-prog"></span>
+          <span id="exScore" class="ex-score"></span>
+        </div>
+        <div class="bar"><div id="exBar"></div></div>
+        <div class="card ex-card">
+          <div id="exAsk" class="ex-ask"></div>
+          <div class="ex-word-row">
+            <div id="exWord" class="ex-word"></div>
+            <button id="exSpeak" class="icon-btn" aria-label="Escuchar">🔊</button>
+          </div>
+          <div id="exTarget" class="ex-ask"></div>
+          <input id="exAnswer" class="ex-answer" type="text" autocapitalize="none" autocomplete="off" autocorrect="off" spellcheck="false" enterkeyhint="done" placeholder="Tu respuesta">
+          <button id="exMic" class="mic" hidden><span>🎤</span><small id="exMicLabel">Toca y habla</small></button>
+          <div id="exFeedback" class="feedback" hidden></div>
+          <div class="ex-actions">
+            <button id="exSkip" class="btn ghost">No lo sé</button>
+            <button id="exCheck" class="btn">Comprobar</button>
+            <button id="exNext" class="btn" hidden>Siguiente →</button>
+          </div>
+        </div>
+      </div>
+
+      <div id="exEnd" hidden>
+        <div class="card center">
+          <div class="ring" id="exRing"><span id="exPct"></span></div>
+          <div id="exEndMsg" class="end-msg"></div>
+          <div id="exEndSub" class="muted"></div>
+        </div>
+        <ul id="exReview" class="review"></ul>
+        <div class="ex-actions">
+          <button id="exRetry" class="btn ghost">Repetir fallos</button>
+          <button id="exAgain" class="btn">Otra serie</button>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <nav class="tabbar">
+    <button data-tab="tr" class="on"><span>🔤</span>Traducir</button>
+    <button data-tab="vb"><span>📚</span>Verbos</button>
+    <button data-tab="fv"><span>⭐</span>Favoritos</button>
+    <button data-tab="ex"><span>🎯</span>Ejercicios</button>
+  </nav>
+
+  <div id="toast" class="toast" hidden></div>
+
+  <script src="dict.js"></script>
+  <script src="verbs.js"></script>
+  <script src="conj.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
