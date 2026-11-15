@@ -76,6 +76,10 @@ main {
 .row { display: flex; align-items: center; gap: 10px; padding: 0 12px 0 16px; min-height: 40px; background: var(--card); font-size: 16px; }
 .row .a { flex: 0 1 auto; max-width: 55%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .row .b { flex: 1; min-width: 0; text-align: right; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.row.open { flex-wrap: wrap; padding-top: 9px; padding-bottom: 9px; row-gap: 2px; }
+.row.open .a, .row.open .b { white-space: normal; overflow: visible; max-width: none; text-align: left; word-break: break-word; }
+.row.open .a { flex: 1 1 calc(100% - 40px); }
+.row.open .b { flex: 1 1 100%; order: 3; }
 .row .icon { width: 30px; height: 30px; color: #c7c7cc; margin-right: -4px; }
 .row .icon svg { width: 19px; height: 19px; }
 .row .icon.on { color: #ff9500; }

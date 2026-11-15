@@ -498,9 +498,21 @@ $('histList').addEventListener('click', (e) => {
     if (current) showResult(current, false);
     return;
   }
+  if (toggleExpand(li)) return;
   openInTranslator(h.from, h.text);
 });
 $('histClear').addEventListener('click', () => { state.hist = []; save(); renderHistory(); });
+
+// Fila cortada con "…": el primer toque la despliega entera y el siguiente la recoge.
+// Si cabe entera, el toque la abre en Traducir como siempre.
+function toggleExpand(li) {
+  const row = li.querySelector('.row');
+  if (row.classList.contains('open')) { row.classList.remove('open'); return true; }
+  const cut = [...row.querySelectorAll('.a, .b')].some((e) => e.scrollWidth > e.clientWidth + 1);
+  if (!cut) return false;
+  row.classList.add('open');
+  return true;
+}
 
 function openInTranslator(from, text) {
   showTab('tr');
@@ -705,6 +717,7 @@ fvList.addEventListener('click', (e) => {
   if (!li) return;
   if (e.target.closest('.swipe-delete')) { removeRow(li); return; }
   if (openRow) { closeRow(); return; }
+  if (toggleExpand(li)) return;
   const f = state.favs.find((x) => x.id === li.dataset.id);
   if (f) openInTranslator(f.from, f.text);
 });
