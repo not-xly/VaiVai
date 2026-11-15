@@ -86,16 +86,21 @@ main {
 .swap { width: 36px; height: 36px; border-radius: 50%; color: var(--accent); display: flex; align-items: center; justify-content: center; transition: transform .25s; }
 .swap.spin { transform: rotate(180deg); }
 
-.input-card { position: relative; padding: 9px 38px 9px 14px; }
+.input-card { position: relative; padding: 9px 76px 9px 14px; }
+.in-tools { position: absolute; top: 4px; right: 6px; display: flex; align-items: center; }
+.in-tools .icon { width: 34px; height: 34px; }
+.in-tools .icon svg { width: 20px; height: 20px; }
+.in-tools .icon.live { color: #fff; background: var(--red); animation: pulse 1.2s infinite; }
 .input-card textarea, .input-card input {
   display: block; width: 100%; border: 0; outline: 0; resize: none; background: transparent;
   font-size: 17px; padding: 2px 0; min-height: 24px; max-height: 40vh; line-height: 1.3;
 }
 .input-card input { -webkit-appearance: none; appearance: none; }
 #tab-vb .input-card { padding-right: 14px; }
-.clear { position: absolute; top: 9px; right: 9px; color: #c7c7cc; }
+#vbInput::placeholder { font-size: 14px; }
+.clear { width: 30px; height: 34px; display: flex; align-items: center; justify-content: center; color: #c7c7cc; }
 .clear svg { width: 20px; height: 20px; }
-.suggest { list-style: none; margin: 6px -26px 0 0; padding: 0; }
+.suggest { list-style: none; margin: 6px -62px 0 0; padding: 0; }
 .suggest:empty { display: none; }
 .suggest li { padding: 8px 0; border-top: .5px solid var(--sep); display: flex; gap: 10px; font-size: 15px; }
 .suggest li span { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -120,22 +125,26 @@ main {
 /* ---------- verbos ---------- */
 .vb-head { display: flex; align-items: flex-start; }
 .vb-head .grow { flex: 1; }
-.vb-head h2 { margin: 0; font-size: 24px; font-weight: 700; }
-.vb-head .es { color: var(--muted); font-size: 15px; margin-top: 2px; }
-.vb-meta { display: grid; grid-template-columns: auto 1fr; gap: 4px 14px; margin: 10px 0 0; font-size: 15px; }
+.vb-head h2 { margin: 0; font-size: 22px; font-weight: 700; }
+.vb-head .es { color: var(--muted); font-size: 14px; margin-top: 1px; }
+.vb-meta { display: flex; flex-wrap: wrap; gap: 2px 14px; margin: 8px 0 0; font-size: 14px; }
+.vb-meta div span { color: var(--muted); margin-right: 4px; }
 .vb-meta dt { color: var(--muted); }
 .vb-meta dd { margin: 0; }
 .irr { color: var(--red); }
 .vb-warn { font-size: 14px; color: var(--muted); margin-top: 10px; }
-.vb-link { display: inline-block; margin-top: 10px; }
-.tense { padding: 10px 14px 4px; }
-.tense h3 { margin: 0 0 4px; font-size: 16px; font-weight: 600; }
-.tense h3 small { font-size: 13px; font-weight: 400; color: var(--muted); margin-left: 6px; }
+.vb-link { display: inline-block; margin-top: 8px; font-size: 14px; }
+.vb-meta b { font-weight: 400; }
+.vb-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.tense { padding: 8px 10px 4px; margin-bottom: 0; }
+.tense h3 { margin: 0 0 3px; font-size: 14px; font-weight: 600; line-height: 1.2; }
+.tense h3 small { display: block; font-size: 11px; font-weight: 400; color: var(--muted); }
 .tense table { width: 100%; border-collapse: collapse; }
-.tense td { padding: 5px 0; border-top: .5px solid var(--sep); font-size: 16px; }
-.tense td.p { color: var(--muted); width: 32%; font-size: 15px; }
-.examples { display: flex; flex-wrap: wrap; justify-content: center; gap: 4px 16px; margin-top: 14px; }
-.examples button { color: var(--accent); font-size: 16px; }
+.tense td { padding: 3px 0; border-top: .5px solid var(--sep); font-size: 15px; white-space: nowrap; }
+.tense td.p { color: var(--muted); width: 1%; padding-right: 8px; font-size: 13px; }
+.examples { display: flex; flex-wrap: wrap; justify-content: center; gap: 2px 14px; margin-top: 4px; }
+.examples button { color: var(--accent); font-size: 14px; }
+#vbEmpty { padding-top: 8px; }
 
 /* ---------- favoritos ---------- */
 #tab-fv.active { display: flex; flex-direction: column; min-height: calc(100vh - var(--safe-t) - var(--tab-h) - var(--safe-b) - 26px); }

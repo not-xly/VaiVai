@@ -39,7 +39,10 @@
 
       <div class="card input-card">
         <textarea id="trInput" rows="1" placeholder="Escribe una palabra o una frase" autocapitalize="none" autocomplete="off" autocorrect="off" spellcheck="false" enterkeyhint="go"></textarea>
-        <button id="trClear" class="clear" aria-label="Borrar" hidden><svg><use href="#i-clear"/></svg></button>
+        <div class="in-tools">
+          <button id="trClear" class="clear" aria-label="Borrar" hidden><svg><use href="#i-clear"/></svg></button>
+          <button id="trMic" class="icon" aria-label="Dictar"><svg><use href="#i-mic"/></svg></button>
+        </div>
         <ul id="suggest" class="suggest"></ul>
       </div>
 
@@ -64,13 +67,11 @@
     <!-- ============ VERBOS ============ -->
     <section id="tab-vb" class="tab">
       <div class="card input-card">
-        <input id="vbInput" type="search" placeholder="Verbo: parlare, andare, hablar…" autocapitalize="none" autocomplete="off" autocorrect="off" spellcheck="false" enterkeyhint="search">
+        <input id="vbInput" type="search" placeholder="Verbo en español o italiano" autocapitalize="none" autocomplete="off" autocorrect="off" spellcheck="false" enterkeyhint="search">
         <ul id="vbSuggest" class="suggest"></ul>
       </div>
       <div id="vbOut"></div>
       <div id="vbEmpty" class="empty">
-        <p>Escribe un verbo en italiano o en español.</p>
-        <p class="muted">Las formas irregulares aparecen en rojo.</p>
         <div class="examples" id="vbExamples"></div>
       </div>
     </section>

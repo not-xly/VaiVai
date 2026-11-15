@@ -196,47 +196,49 @@ function speak(text, lang) {
   speechSynthesis.speak(u);
 }
 
-// Reconocimiento de voz. En iPhone, empezar una escucha nueva antes de que la anterior
-// haya terminado del todo hace que falle a partir de la segunda palabra: se espera a que
-// acabe (onend) y se usa el último texto oído aunque Safari no lo marque como final.
+// Reconocimiento de voz. En iPhone, Safari a veces no avisa de que la escucha ha
+// terminado (onend), y la siguiente ya no arrancaba. Ahora: se cancela siempre la
+// anterior, la respuesta se da por buena al llegar el resultado final o tras 1,4 s de
+// silencio, y cada botón sabe si está escuchando por su propio estado.
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-let recog = null, recogBusy = false;
-function listen(lang, onText, onEnd) {
+let recog = null;
+function listen(lang, onText, onDone) {
   if (!SR) return false;
   if ('speechSynthesis' in window) speechSynthesis.cancel();
-  const begin = (attempt) => {
-    if (recogBusy) {                       // la anterior aún se está cerrando
-      if (attempt > 10) { onEnd(''); return; }
-      setTimeout(() => begin(attempt + 1), 150);
-      return;
-    }
-    const r = new SR();
-    recog = r;
-    r.lang = LANG[lang].bcp;
-    r.interimResults = true;
-    r.maxAlternatives = 3;
-    r.continuous = false;
-    let lastText = '', alts = [];
-    r.onresult = (e) => {
-      let txt = '';
-      for (let i = 0; i < e.results.length; i++) txt += e.results[i][0].transcript;
-      const res = e.results[e.results.length - 1];
-      lastText = txt;
-      alts = Array.from(res).map((x) => x.transcript);
-      onText(txt);
-    };
-    r.onerror = (e) => {
-      if (e.error === 'not-allowed' || e.error === 'service-not-allowed') toast('Permite el micrófono o usa el dictado del teclado');
-      else if (e.error === 'no-speech') toast('No te he oído. Prueba otra vez.');
-    };
-    r.onend = () => { recogBusy = false; if (recog === r) recog = null; onEnd(lastText, alts); };
-    try { recogBusy = true; r.start(); }
-    catch (err) {
-      recogBusy = false; recog = null;
-      if (attempt < 3) setTimeout(() => begin(attempt + 1), 300); else onEnd('');
-    }
+  if (recog) { const old = recog; old.onresult = old.onend = old.onerror = null; try { old.abort(); } catch (e) { /* ya parado */ } recog = null; }
+  const r = new SR();
+  recog = r;
+  r.lang = LANG[lang].bcp;
+  r.interimResults = true;
+  r.maxAlternatives = 3;
+  r.continuous = false;
+  let last = '', alts = [], done = false, silence = 0;
+  const finish = () => {
+    if (done) return;
+    done = true;
+    clearTimeout(silence); clearTimeout(maxT);
+    if (recog === r) { recog = null; try { r.abort(); } catch (e) { /* ya parado */ } }
+    onDone(last.trim(), alts);
   };
-  begin(0);
+  const maxT = setTimeout(finish, 12000);
+  r.onresult = (e) => {
+    let txt = '';
+    for (let i = 0; i < e.results.length; i++) txt += e.results[i][0].transcript;
+    const res = e.results[e.results.length - 1];
+    last = txt;
+    alts = Array.from(res).map((x) => x.transcript);
+    onText(txt);
+    clearTimeout(silence);
+    if (res.isFinal) finish(); else silence = setTimeout(finish, 1400);
+  };
+  r.onerror = (e) => {
+    if (e.error === 'not-allowed' || e.error === 'service-not-allowed') toast('Permite el micrófono o usa el dictado del teclado');
+    else if (e.error === 'no-speech') toast('No te he oído. Prueba otra vez.');
+    finish();
+  };
+  r.onend = finish;
+  try { r.start(); }
+  catch (err) { setTimeout(() => { try { r.start(); } catch (e2) { finish(); } }, 350); }
   return true;
 }
 function stopListening() { if (recog) { try { recog.stop(); } catch (e) { /* ya parado */ } } }
@@ -295,6 +297,16 @@ trInput.addEventListener('input', () => {
 });
 trInput.addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit(); }
+});
+$('trMic').addEventListener('click', () => {
+  const mic = $('trMic');
+  if (mic.classList.contains('live')) { stopListening(); return; }
+  const ok = listen(state.from, (txt) => { trInput.value = txt; autoSize(); }, (heard) => {
+    mic.classList.remove('live');
+    if (heard) { trInput.value = heard; autoSize(); submit(); }
+  });
+  if (ok) mic.classList.add('live');
+  else { toast('Usa el micrófono del teclado para dictar'); trInput.focus(); }
 });
 $('trClear').addEventListener('click', () => { trInput.value = ''; autoSize(); renderSuggest(); hideResult(); trInput.focus(); });
 
@@ -580,12 +592,12 @@ function showVerb(input) {
     `<div class="card"><div class="vb-head"><div class="grow"><h2>${esc(name)}</h2><div class="es">${esc(es.slice(0, 4).join(', '))}</div></div>` +
     `<button class="icon" id="vbSpeak" aria-label="Escuchar">${ICON('speaker')}</button><button class="icon star${fav ? ' on' : ''}" id="vbStar" aria-label="Favorito">${ICON(fav ? 'star-fill' : 'star')}</button></div>` +
     (r.note ? `<div class="note">${esc(r.note)}</div>` : '') +
-    `<dl class="vb-meta"><dt>Participio</dt><dd class="${known && reg && reg.part !== t.part ? 'irr' : ''}">${esc(t.part)}</dd>` +
-    `<dt>Gerundio</dt><dd>${esc(t.ger)}</dd><dt>Auxiliar</dt><dd>${t.aux}${t.aux2 ? ` <span class="muted">(también ${t.aux2})</span>` : ''}</dd></dl>` +
+    `<div class="vb-meta"><div><span>Participio</span><b class="${known && reg && reg.part !== t.part ? 'irr' : ''}">${esc(t.part)}</b></div>` +
+    `<div><span>Gerundio</span>${esc(t.ger)}</div><div><span>Auxiliar</span>${t.aux}${t.aux2 ? ` / ${t.aux2}` : ''}</div></div>` +
     (known ? '' : `<div class="vb-warn">No está en mi lista de verbos: conjugación regular estimada.</div>`) +
     `<a class="link vb-link" target="_blank" rel="noopener" href="https://www.wordreference.com/conj/itverbs.aspx?v=${encodeURIComponent(r.inf)}">Conjugación en WordReference</a>` +
     `</div>` +
-    TENSE_INFO.map(([k, a, b]) => table(k, a, b)).join('');
+    `<div class="vb-grid">${TENSE_INFO.map(([k, a, b]) => table(k, a, b)).join('')}</div>`;
   $('vbSpeak').addEventListener('click', () => speak(name, 'it'));
   $('vbStar').addEventListener('click', () => {
     const f = findFav('it', name);
@@ -799,7 +811,7 @@ $('exSkip').addEventListener('click', () => checkAnswer(true));
 $('exNext').addEventListener('click', nextQuestion);
 $('exMic').addEventListener('click', () => {
   if (!run || !$('exNext').hidden) return;
-  if (recog) { stopListening(); return; }
+  if ($('exMic').classList.contains('live')) { stopListening(); return; }
   const it = run.items[run.i];
   const q = run.i;
   const ok = listen(other(it.from), (txt) => { $('exAnswer').value = txt; }, (heard, alts) => {
