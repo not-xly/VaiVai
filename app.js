@@ -142,10 +142,13 @@ async function onlineTranslate(text, from, to) {
   if (state.cache[key]) return { text: state.cache[key], src: 'guardada' };
   if (!navigator.onLine) return null;
   const q = encodeURIComponent(text.trim());
+  let detected = null;
   const tries = [
     async () => {
-      const j = await fetchJSON(`https://clients5.google.com/translate_a/t?client=dict-chrome-ex&sl=${from}&tl=${to}&q=${q}`);
-      const v = Array.isArray(j) ? (Array.isArray(j[0]) ? j[0][0] : j[0]) : null;
+      // sl=auto: Google dice en qué idioma estaba el texto ([[traducción, idioma]])
+      const j = await fetchJSON(`https://clients5.google.com/translate_a/t?client=dict-chrome-ex&sl=auto&tl=${to}&q=${q}`);
+      if (Array.isArray(j) && Array.isArray(j[0])) { detected = j[0][1]; return j[0][0]; }
+      const v = Array.isArray(j) ? j[0] : null;
       return typeof v === 'string' ? v : null;
     },
     async () => {
@@ -160,6 +163,7 @@ async function onlineTranslate(text, from, to) {
   for (const t of tries) {
     try {
       const v = await t();
+      if (detected === to) return { detected };   // el texto ya estaba en el otro idioma
       if (v && v.trim()) {
         state.cache[key] = v.trim();
         save();
@@ -313,13 +317,13 @@ $('suggest').addEventListener('click', (e) => {
 function hideResult() { $('trResult').hidden = true; current = null; }
 
 // final = el usuario lo ha pedido (Enter/botón): se guarda en recientes
-async function translate(final) {
+async function translate(final, autoNote) {
   const text = trInput.value.trim();
   if (!text) return;
   const id = ++reqId;
   let from = state.from;
   let hit = dictLookup(text, from);
-  let note = '';
+  let note = autoNote || '';
   const words = norm(text).split(' ').length;
   // Si no está en el idioma elegido pero sí en el otro, se cambia solo
   if (!hit && words <= 3) {
@@ -340,8 +344,13 @@ async function translate(final) {
     if (hit.lemma) res.note = (note ? note + ' · ' : '') + `«${text}» es ${hit.formDesc === 'forma' ? 'una forma' : hit.formDesc} de «${hit.lemma}»`;
   }
   showResult(res, !hit);
-  const on = await onlineTranslate(text, from, to);
+  let on = await onlineTranslate(text, from, to);
   if (id !== reqId) return;
+  if (on && on.detected && !autoNote) {
+    // Frase escrita en el otro idioma: se cambia el sentido y se traduce otra vez
+    state.from = to; save(); renderLangbar();
+    return translate(final, `Detectado: ${LANG[to].name.toLowerCase()}`);
+  }
   if (on) {
     const t = on.text;
     if (!hit) { res.tr = t; res.src = on.src === 'guardada' ? 'Traducción guardada' : 'Traducción online (Google)'; }
@@ -368,6 +377,10 @@ function showResult(res, loading) {
   $('resNote').textContent = res.note || '';
   $('resAlts').innerHTML = res.alts.slice(0, 8).map((a) => `<button>${esc(a)}</button>`).join('');
   $('resSource').textContent = loading ? '' : res.src;
+  // WordReference no deja consultarse desde otra web: se abre su página en Safari
+  const wr = $('resWR');
+  wr.hidden = loading || norm(res.text).split(' ').length > 3;
+  wr.href = `https://www.wordreference.com/${res.from === 'es' ? 'esit' : 'ites'}/${encodeURIComponent(norm(res.text))}`;
   $('resStar').hidden = !res.tr;
   $('resSpeak').hidden = !res.tr;
   $('resStar').classList.toggle('on', !!findFav(res.from, res.text));
@@ -540,6 +553,7 @@ function showVerb(input) {
     (r.note ? `<div class="note">${esc(r.note)}</div>` : '') +
     `<dl class="vb-meta"><dt>Participio</dt><dd class="${reg && reg.part !== part && known ? 'irr' : ''}">${esc(part)}</dd>` +
     `<dt>Gerundio</dt><dd>${esc(t.ger)}</dd><dt>Auxiliar</dt><dd>${t.aux}${t.aux2 ? ` <span class="muted">(también ${t.aux2})</span>` : ''}</dd></dl>` +
+    `<a class="wr" target="_blank" rel="noopener" href="https://www.wordreference.com/conj/itverbs.aspx?v=${encodeURIComponent(r.inf)}">Conjugación en WordReference ↗</a>` +
     (known ? '' : `<div class="vb-warn">No está en mi lista de verbos: conjugación regular estimada, compruébala.</div>`) +
     `</div>` +
     TENSE_INFO.map(([k, a, b]) => table(k, a, b)).join('') +
