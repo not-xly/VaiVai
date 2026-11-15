@@ -209,3 +209,8 @@ main {
 .review .mk.ok { color: var(--green); }
 .review .mk.ko { color: var(--red); }
 .review .yours { color: var(--red); text-decoration: line-through; margin-right: 6px; }
+
+/* marcadas para repasar */
+.mark { display: block; margin: 8px 2px 0; font-size: 14px; }
+.mark.on { color: var(--red); }
+.dot { width: 7px; height: 7px; border-radius: 50%; background: var(--red); flex: none; margin-left: -11px; margin-right: -3px; }

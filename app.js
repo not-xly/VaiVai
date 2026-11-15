@@ -32,7 +32,10 @@ function load() {
     const d = defaults();
     const st = { ...d, ...s, ex: { ...d.ex, ...(s.ex || {}) } };
     // minúscula inicial también en lo guardado antes
-    for (const f of st.favs) { f.text = lc(f.text); f.tr = lc(f.tr); f.alts = (f.alts || []).map(lc); }
+    for (const f of st.favs) {
+      f.text = lc(f.text); f.tr = lc(f.tr); f.alts = (f.alts || []).map(lc);
+      if (f.miss === undefined) f.miss = (f.ko || 0) > (f.ok || 0);   // antes no se marcaban
+    }
     for (const h of st.hist) { h.text = lc(h.text); h.tr = lc(h.tr); h.alts = (h.alts || []).map(lc); }
     return st;
   } catch (err) {
@@ -649,7 +652,7 @@ function renderFavs() {
   openRow = null;
   $('fvList').innerHTML = list.map((f) => {
     const [a, b] = pair(f, state.fvDir);
-    return `<li data-id="${f.id}"><div class="swipe-delete"><span>Eliminar</span></div><div class="row"><span class="a">${esc(a)}</span><span class="b">${esc(b)}</span></div></li>`;
+    return `<li data-id="${f.id}"><div class="swipe-delete"><span>Eliminar</span></div><div class="row">${f.miss ? '<span class="dot" title="Fallada"></span>' : ''}<span class="a">${esc(a)}</span><span class="b">${esc(b)}</span></div></li>`;
   }).join('');
   $('fvCount').textContent = state.favs.length ? `${state.favs.length} ${state.favs.length === 1 ? 'favorito' : 'favoritos'}` + (q ? ` · ${list.length} encontrados` : '') : '';
   $('fvEmpty').hidden = state.favs.length > 0;
@@ -755,7 +758,7 @@ $('importFile').addEventListener('change', async (e) => {
 // ================= EJERCICIOS =================
 let run = null;   // {items:[{id, from, prompt, answers}], i, ok, results:[]}
 onSeg($('exN'), (v) => { state.ex.n = +v; save(); renderExSetup(); });
-onSeg($('exOrder'), (v) => { state.ex.order = v; save(); });
+onSeg($('exOrder'), (v) => { state.ex.order = v; save(); renderExSetup(); });
 onSeg($('exDir'), (v) => { state.ex.dir = v; save(); });
 onSeg($('exMode'), (v) => { state.ex.mode = v; save(); renderExSetup(); });
 
@@ -763,9 +766,16 @@ function renderExSetup() {
   $('exSetup').hidden = false; $('exRun').hidden = true; $('exEnd').hidden = true;
   setSeg($('exN'), state.ex.n); setSeg($('exOrder'), state.ex.order); setSeg($('exDir'), state.ex.dir); setSeg($('exMode'), state.ex.mode);
   const n = state.favs.length;
-  $('exStart').disabled = n === 0;
-  $('exInfo').textContent = n === 0 ? 'Primero guarda palabras en favoritos.' :
-    n < state.ex.n ? `Tienes ${n} favoritos: la serie tendrá ${n}.` : `${n} favoritos disponibles.`;
+  const miss = state.favs.filter((f) => f.miss).length;
+  if (state.ex.order === 'miss') {
+    $('exStart').disabled = miss === 0;
+    $('exInfo').textContent = n === 0 ? 'Primero guarda palabras en favoritos.' : miss === 0 ? 'No tienes palabras falladas. Las que falles (o marques) aparecerán aquí.' :
+      miss < state.ex.n ? `Tienes ${miss} ${miss === 1 ? 'fallada' : 'falladas'}: la serie tendrá ${miss}.` : `${miss} falladas disponibles.`;
+  } else {
+    $('exStart').disabled = n === 0;
+    $('exInfo').textContent = n === 0 ? 'Primero guarda palabras en favoritos.' :
+      n < state.ex.n ? `Tienes ${n} favoritos: la serie tendrá ${n}.` : `${n} favoritos disponibles.`;
+  }
   if (state.ex.mode === 'speak' && !SR) $('exInfo').textContent += ' Para hablar usa el dictado del teclado.';
   $('exLast').textContent = state.last ? `Última serie: ${state.last.ok} de ${state.last.n} (${Math.round(state.last.ok / state.last.n * 100)} %)` : '';
 }
@@ -782,7 +792,11 @@ function shuffle(a) { for (let i = a.length - 1; i > 0; i--) { const j = Math.fl
 $('exStart').addEventListener('click', () => {
   const favs = state.favs.filter((f) => f.tr);
   if (!favs.length) return;
-  const pick = state.ex.order === 'rnd' ? shuffle(favs.slice()).slice(0, state.ex.n) : sortedFavs(state.ex.order).filter((f) => f.tr).slice(0, state.ex.n);
+  const order = state.ex.order;
+  const pick = order === 'rnd' ? shuffle(favs.slice()).slice(0, state.ex.n)
+    : order === 'miss' ? shuffle(favs.filter((f) => f.miss)).slice(0, state.ex.n)
+    : sortedFavs(order).filter((f) => f.tr).slice(0, state.ex.n);
+  if (!pick.length) return;
   startRun(pick.map((fav) => {
     const from = state.ex.dir === 'mix' ? (Math.random() < 0.5 ? 'es' : 'it') : state.ex.dir;
     return { id: fav.id, from, ...answersFor(fav, from) };
@@ -862,7 +876,9 @@ function checkAnswer(skip) {
   if (r.ok) run.ok++;
   run.results.push({ ...it, given, ok: r.ok });
   const fav = state.favs.find((f) => f.id === it.id);
-  if (fav) { if (r.ok) fav.ok++; else fav.ko++; save(); }
+  // Fallada = marcada para repasar; acertarla después la desmarca
+  if (fav) { if (r.ok) fav.ok++; else fav.ko++; fav.miss = !r.ok; save(); }
+  renderMark(fav, r.ok);
   const a = $('exAnswer');
   a.disabled = true;
   a.classList.add(r.ok ? 'ok' : 'ko');
@@ -881,6 +897,22 @@ function checkAnswer(skip) {
   $('exNext').textContent = run.i + 1 < run.items.length ? 'Siguiente' : 'Ver resultado';
   $('exNext').focus();
 }
+function renderMark(fav, ok) {
+  const b = $('exMark');
+  b.hidden = !fav;
+  if (!fav) return;
+  b.classList.toggle('on', !!fav.miss);
+  b.textContent = fav.miss ? (ok ? 'Marcada para repasar · quitar' : 'Marcada para repasar en «Falladas» · quitar') : 'Marcar para repasar';
+}
+$('exMark').addEventListener('click', () => {
+  const it = run && run.items[run.i];
+  const fav = it && state.favs.find((f) => f.id === it.id);
+  if (!fav) return;
+  fav.miss = !fav.miss;
+  save();
+  const res = run.results[run.results.length - 1];
+  renderMark(fav, res && res.ok);
+});
 function nextQuestion() {
   run.i++;
   if (run.i < run.items.length) showQuestion(); else finishRun();
