@@ -117,6 +117,10 @@ function dictLookup(text, lang) {
   const D = DICT[lang];
   const key = n in D ? n : idx(lang).m.get(fold(text));
   if (key) return { key, tr: uniq(D[key].map(lc)) };
+  if (lang === 'es') {                          // "tengo" -> tener, "vagos" -> vago
+    const ref = (window.DICT_REF_ES || {})[n];
+    if (ref && D[ref]) return { key: n, tr: uniq(D[ref].map(lc)), lemma: ref, formDesc: 'forma' };
+  }
   if (lang === 'it') {
     const ref = (window.DICT_REF || {})[n];
     if (ref && D[ref]) return { key: n, tr: uniq(D[ref].map(lc)), lemma: ref, formDesc: 'forma' };
@@ -151,16 +155,18 @@ async function fetchJSON(url, ms = 6000) {
   } finally { clearTimeout(timer); }
 }
 // Devuelve {text} o {detected} si el texto ya estaba en el idioma de destino, o null
-async function onlineTranslate(text, from, to) {
+async function onlineTranslate(text, from, to, auto) {
   const key = from + '|' + text.trim().toLowerCase();
   if (state.cache[key]) return { text: lc(state.cache[key]) };
   if (!navigator.onLine) return null;
-  const q = encodeURIComponent(text.trim());
+  // palabras sueltas en minúscula: "Stella" con mayúscula Google la toma por el nombre "Estela"
+  const q = encodeURIComponent(auto ? text.trim() : text.trim().toLowerCase());
   let detected = null;
   const tries = [
     async () => {
-      // sl=auto: Google dice en qué idioma estaba el texto ([[traducción, idioma]])
-      const j = await fetchJSON(`https://clients5.google.com/translate_a/t?client=dict-chrome-ex&sl=auto&tl=${to}&q=${q}`);
+      // Frases: sl=auto, Google dice en qué idioma estaba ([[traducción, idioma]]).
+      // Palabras sueltas no: "vago" lo toma por italiano aunque sea español.
+      const j = await fetchJSON(`https://clients5.google.com/translate_a/t?client=dict-chrome-ex&sl=${auto ? 'auto' : from}&tl=${to}&q=${q}`);
       if (Array.isArray(j) && Array.isArray(j[0])) { detected = j[0][1]; return j[0][0]; }
       const v = Array.isArray(j) ? j[0] : null;
       return typeof v === 'string' ? v : null;
@@ -373,13 +379,23 @@ async function translate(final, autoNote) {
   let note = autoNote || '';
   const words = norm(text).split(' ').length;
   // Si no está en el idioma elegido pero sí en el otro, se cambia solo
+  // No está en el diccionario del idioma elegido pero sí en el otro. Antes de cambiar el
+  // sentido se pregunta a Google en el idioma elegido: si la traduce ("vago" -> "pigro"),
+  // la palabra era de ese idioma y no se cambia nada.
+  let pre = null;
   if (!hit && words <= 3) {
     const o = dictLookup(text, other(from));
     if (o) {
-      from = other(from);
-      hit = o;
-      state.from = from; save(); renderLangbar();
-      note = `Detectado: ${LANG[from].name.toLowerCase()}`;
+      showResult({ from, text: lc(text), tr: '', alts: [], note: '' }, true);
+      pre = await onlineTranslate(text, from, other(from), false);
+      if (id !== reqId) return;
+      if (!(pre && pre.text && fold(pre.text) !== fold(text))) {
+        pre = null;
+        from = other(from);
+        hit = o;
+        state.from = from; save(); renderLangbar();
+        note = `Detectado: ${LANG[from].name.toLowerCase()}`;
+      }
     }
   }
   const to = other(from);
@@ -399,7 +415,7 @@ async function translate(final, autoNote) {
     if (hit.lemma) res.note = (note ? note + ' · ' : '') + `«${lc(text)}» es ${hit.formDesc === 'forma' ? 'una forma' : hit.formDesc} de «${hit.lemma}»`;
   }
   showResult(res, !hit);
-  const on = await onlineTranslate(text, from, to);
+  const on = pre || await onlineTranslate(text, from, to, words >= 3);
   if (id !== reqId) return;
   if (on && on.detected && !hit && !autoNote) {
     // Frase escrita en el otro idioma: se cambia el sentido y se traduce otra vez
@@ -410,11 +426,10 @@ async function translate(final, autoNote) {
     if (!hit) res.tr = on.text;
     else if (words >= 3) { res.alts = uniq([res.tr, ...res.alts]).filter((x) => fold(x) !== fold(on.text)); res.tr = on.text; }
     else {
-      // Palabra suelta: manda el diccionario (Google a veces la toma por un nombre propio:
-      // "Stella" -> "Estela"). Si Google coincide con una de sus acepciones, esa va primero.
-      const all = [res.tr, ...res.alts];
-      const i = all.findIndex((x) => fold(x) === fold(on.text));
-      if (i > 0) { all.unshift(all.splice(i, 1)[0]); res.tr = all[0]; res.alts = all.slice(1); }
+      // Palabra suelta: Google suele dar el sentido más común ("vago" -> "pigro"); va primero
+      // y el diccionario aporta las demás acepciones
+      const all = [res.tr, ...res.alts].filter((x) => fold(x) !== fold(on.text));
+      if (fold(on.text) !== fold(text)) { res.tr = on.text; res.alts = all; }
     }
   } else if (!hit) {
     res.error = navigator.onLine ? 'No se ha podido traducir. Inténtalo de nuevo.' : 'Sin conexión. Sin internet solo se traducen palabras del diccionario y frases ya traducidas antes.';
@@ -595,6 +610,7 @@ function resolveVerb(input) {
   if (!v) return null;
   let note = '';
   const isVerbName = (x) => x in VERBS || (/rsi$/.test(x) && (x.slice(0, -2) + 'e' in VERBS || x.slice(0, -3) + 'rre' in VERBS));
+  if (!isVerbName(v) && !DICT.es[v] && (window.DICT_REF_ES || {})[v]) v = window.DICT_REF_ES[v];   // "tengo" -> tener
   if (!isVerbName(v)) {
     const es = DICT.es[v] && DICT.es[v].find((x) => isVerbName(norm(x)));
     const form = verbForms().get(v);
