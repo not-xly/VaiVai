@@ -3,18 +3,23 @@
 
 const STORE_KEY = 'vaivai-v1';            // único: todas las apps de not-xly.github.io comparten localStorage
 const $ = (id) => document.getElementById(id);
-const LANG = { es: { name: 'Español', flag: '🇪🇸', bcp: 'es-ES' }, it: { name: 'Italiano', flag: '🇮🇹', bcp: 'it-IT' } };
+const LANG = { es: { name: 'Español', bcp: 'es-ES' }, it: { name: 'Italiano', bcp: 'it-IT' } };
 const other = (l) => (l === 'es' ? 'it' : 'es');
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const ICON = (id) => `<svg><use href="#i-${id}"/></svg>`;
+// Todo en minúscula inicial (salvo siglas: "UE", "USA")
+const lc = (s) => { s = String(s || '').trim(); return /^[¡¿]?\p{Lu}{2}/u.test(s) ? s : s.replace(/^([¡¿"«]?)(\p{Lu})/u, (m, p, c) => p + c.toLowerCase()); };
 
 // ---------- estado guardado ----------
 function defaults() {
   return {
     from: 'es',
     favs: [],              // {id, from, text, tr, alts, t, ok, ko}
-    hist: [],              // {from, text, tr}
+    hist: [],              // {from, text, tr, alts}
     cache: {},             // traducciones online: "es|hola" -> texto
+    mine: {},              // traducciones corregidas a mano: "es|hola" -> texto (mandan siempre)
     fvSort: 'new',
+    fvDir: 'es',
     ex: { n: 10, order: 'new', dir: 'es', mode: 'write' },
     last: null,            // última serie {ok, n, t}
   };
@@ -25,7 +30,11 @@ function load() {
   try {
     const s = JSON.parse(raw);
     const d = defaults();
-    return { ...d, ...s, ex: { ...d.ex, ...(s.ex || {}) } };
+    const st = { ...d, ...s, ex: { ...d.ex, ...(s.ex || {}) } };
+    // minúscula inicial también en lo guardado antes
+    for (const f of st.favs) { f.text = lc(f.text); f.tr = lc(f.tr); f.alts = (f.alts || []).map(lc); }
+    for (const h of st.hist) { h.text = lc(h.text); h.tr = lc(h.tr); h.alts = (h.alts || []).map(lc); }
+    return st;
   } catch (err) {
     // No machacar los datos: se guarda una copia del texto dañado antes de empezar de cero
     localStorage.setItem(STORE_KEY + '-corrupt-' + Date.now(), raw);
@@ -45,7 +54,7 @@ function save() {
 const norm = (s) => String(s || '').toLowerCase().replace(/[’`´]/g, "'").replace(/[¡!¿?.,;:"«»()]/g, ' ').replace(/\s+/g, ' ').trim();
 const fold = (s) => norm(s).normalize('NFD').replace(/[̀-ͯ]/g, '');
 const ARTICLES = /^(il|lo|la|l'|i|gli|le|un|uno|una|un'|el|los|las|unos|unas)\s*/;
-const bare = (s) => fold(s).replace(ARTICLES, '').replace(/^(to |a )/, '').trim();
+const bare = (s) => fold(s).replace(ARTICLES, '').trim();
 
 function lev(a, b) {
   if (Math.abs(a.length - b.length) > 2) return 3;
@@ -68,13 +77,13 @@ function toast(msg) {
 // ---------- diccionario offline ----------
 const DICT = { es: window.DICT_ES || {}, it: window.DICT_IT || {} };
 const VERBS = window.VERBS || {};
-const index = {};   // por idioma: {fold: Map(fold -> clave), sorted: [claves plegadas]}
+const index = {};   // por idioma: {m: Map(plegada -> clave), sorted: [plegadas]}
 function idx(lang) {
   if (index[lang]) return index[lang];
   const m = new Map();
   for (const k of Object.keys(DICT[lang])) {
     const f = fold(k);
-    if (!m.has(f) || k === k.toLowerCase()) m.set(f, k);
+    if (!m.has(f) || k === k.toLowerCase()) m.set(f, k);   // "stella" antes que "Stella"
   }
   return (index[lang] = { m, sorted: [...m.keys()].sort() });
 }
@@ -102,21 +111,21 @@ function dictLookup(text, lang) {
   const n = norm(text);
   if (!n) return null;
   const D = DICT[lang];
-  let key = n in D ? n : (text.trim() in D ? text.trim() : idx(lang).m.get(fold(text)));
-  if (key) return { key, tr: D[key] };
+  const key = n in D ? n : idx(lang).m.get(fold(text));
+  if (key) return { key, tr: uniq(D[key].map(lc)) };
   if (lang === 'it') {
     const ref = (window.DICT_REF || {})[n];
-    if (ref && D[ref]) return { key: n, tr: D[ref], lemma: ref, formDesc: 'forma' };
+    if (ref && D[ref]) return { key: n, tr: uniq(D[ref].map(lc)), lemma: ref, formDesc: 'forma' };
     const vf = verbForms().get(n);
-    if (vf) return { key: n, tr: D[vf.inf], lemma: vf.inf, formDesc: vf.desc };
+    if (vf) return { key: n, tr: uniq(D[vf.inf].map(lc)), lemma: vf.inf, formDesc: vf.desc };
   }
-  // sin artículo: "il libro" -> "libro"
-  const b = n.replace(ARTICLES, '');
-  if (b !== n && b in D) return { key: b, tr: D[b] };
+  const b = n.replace(ARTICLES, '');            // "il libro" -> "libro"
+  if (b !== n && b in D) return { key: b, tr: uniq(D[b].map(lc)) };
   return null;
 }
+function uniq(a) { const seen = new Set(); return a.filter((x) => { const f = fold(x); if (seen.has(f)) return false; seen.add(f); return true; }); }
 
-function suggestions(text, lang, max = 6) {
+function suggestions(text, lang, max = 5) {
   const f = fold(text);
   if (f.length < 2) return [];
   const { sorted, m } = idx(lang);
@@ -137,9 +146,10 @@ async function fetchJSON(url, ms = 6000) {
     return await r.json();
   } finally { clearTimeout(timer); }
 }
+// Devuelve {text} o {detected} si el texto ya estaba en el idioma de destino, o null
 async function onlineTranslate(text, from, to) {
   const key = from + '|' + text.trim().toLowerCase();
-  if (state.cache[key]) return { text: state.cache[key], src: 'guardada' };
+  if (state.cache[key]) return { text: lc(state.cache[key]) };
   if (!navigator.onLine) return null;
   const q = encodeURIComponent(text.trim());
   let detected = null;
@@ -163,11 +173,11 @@ async function onlineTranslate(text, from, to) {
   for (const t of tries) {
     try {
       const v = await t();
-      if (detected === to) return { detected };   // el texto ya estaba en el otro idioma
+      if (detected === to) return { detected };
       if (v && v.trim()) {
         state.cache[key] = v.trim();
         save();
-        return { text: v.trim(), src: 'Google' };
+        return { text: lc(v) };
       }
     } catch (err) { /* probar el siguiente servicio */ }
   }
@@ -185,44 +195,54 @@ function speak(text, lang) {
   u.rate = 0.92;
   speechSynthesis.speak(u);
 }
+
+// Reconocimiento de voz. En iPhone, empezar una escucha nueva antes de que la anterior
+// haya terminado del todo hace que falle a partir de la segunda palabra: se espera a que
+// acabe (onend) y se usa el último texto oído aunque Safari no lo marque como final.
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-let recog = null;
-// Escucha una frase; onText(texto, final). Devuelve false si el navegador no puede.
+let recog = null, recogBusy = false;
 function listen(lang, onText, onEnd) {
   if (!SR) return false;
-  stopListening();
-  try {
-    recog = new SR();
-    recog.lang = LANG[lang].bcp;
-    recog.interimResults = true;
-    recog.maxAlternatives = 3;
-    recog.continuous = false;
-    let finalText = '';
-    recog.onresult = (e) => {
+  if ('speechSynthesis' in window) speechSynthesis.cancel();
+  const begin = (attempt) => {
+    if (recogBusy) {                       // la anterior aún se está cerrando
+      if (attempt > 10) { onEnd(''); return; }
+      setTimeout(() => begin(attempt + 1), 150);
+      return;
+    }
+    const r = new SR();
+    recog = r;
+    r.lang = LANG[lang].bcp;
+    r.interimResults = true;
+    r.maxAlternatives = 3;
+    r.continuous = false;
+    let lastText = '', alts = [];
+    r.onresult = (e) => {
       let txt = '';
       for (let i = 0; i < e.results.length; i++) txt += e.results[i][0].transcript;
-      const fin = e.results[e.results.length - 1].isFinal;
-      if (fin) finalText = txt;
-      onText(txt, fin, e.results[e.results.length - 1]);
+      const res = e.results[e.results.length - 1];
+      lastText = txt;
+      alts = Array.from(res).map((x) => x.transcript);
+      onText(txt);
     };
-    recog.onerror = (e) => {
-      if (e.error === 'not-allowed' || e.error === 'service-not-allowed') toast('Permite el micrófono o usa el dictado del teclado 🎤');
+    r.onerror = (e) => {
+      if (e.error === 'not-allowed' || e.error === 'service-not-allowed') toast('Permite el micrófono o usa el dictado del teclado');
       else if (e.error === 'no-speech') toast('No te he oído. Prueba otra vez.');
     };
-    recog.onend = () => { recog = null; onEnd && onEnd(finalText); };
-    recog.start();
-    return true;
-  } catch (err) {
-    recog = null;
-    return false;
-  }
+    r.onend = () => { recogBusy = false; if (recog === r) recog = null; onEnd(lastText, alts); };
+    try { recogBusy = true; r.start(); }
+    catch (err) {
+      recogBusy = false; recog = null;
+      if (attempt < 3) setTimeout(() => begin(attempt + 1), 300); else onEnd('');
+    }
+  };
+  begin(0);
+  return true;
 }
 function stopListening() { if (recog) { try { recog.stop(); } catch (e) { /* ya parado */ } } }
 
 // ---------- pestañas ----------
-let currentTab = 'tr';
 function showTab(name) {
-  currentTab = name;
   document.querySelectorAll('.tab').forEach((s) => s.classList.toggle('active', s.id === 'tab-' + name));
   document.querySelectorAll('.tabbar button').forEach((b) => b.classList.toggle('on', b.dataset.tab === name));
   stopListening();
@@ -234,31 +254,29 @@ document.querySelectorAll('.tabbar button').forEach((b) => b.addEventListener('c
 
 function setSeg(el, value) { el.querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.v === String(value))); }
 function onSeg(el, fn) { el.addEventListener('click', (e) => { const b = e.target.closest('button'); if (b) { setSeg(el, b.dataset.v); fn(b.dataset.v); } }); }
-
-function updateNet() { $('netState').hidden = navigator.onLine; }
-window.addEventListener('online', updateNet);
-window.addEventListener('offline', updateNet);
+function setStar(btn, on) { btn.classList.toggle('on', on); btn.innerHTML = ICON(on ? 'star-fill' : 'star'); }
 
 // ================= TRADUCIR =================
 const trInput = $('trInput');
 let current = null;      // resultado mostrado {from, text, tr, alts, ...}
-let liveTimer = 0, reqId = 0;
+let liveTimer = 0, histTimer = 0, reqId = 0;
 
 function renderLangbar() {
   const f = state.from, t = other(f);
-  $('langFrom').textContent = `${LANG[f].flag} ${LANG[f].name}`;
-  $('langTo').textContent = `${LANG[t].flag} ${LANG[t].name}`;
+  $('langFrom').textContent = LANG[f].name;
+  $('langTo').textContent = LANG[t].name;
   trInput.lang = f;
-  trInput.placeholder = f === 'es' ? 'Escribe una palabra o una frase…' : 'Scrivi una parola o una frase…';
+  trInput.placeholder = f === 'es' ? 'Escribe una palabra o una frase' : 'Scrivi una parola o una frase';
 }
 $('swap').addEventListener('click', () => {
   $('swap').classList.toggle('spin');
   const resultText = current && current.tr;
+  const same = current && norm(trInput.value) === norm(current.text);
   state.from = other(state.from);
   save();
   renderLangbar();
   // Como en los traductores: la traducción pasa a ser el texto de entrada
-  if (resultText && norm(trInput.value) === norm(current.text)) trInput.value = resultText;
+  if (resultText && same) trInput.value = resultText;
   autoSize();
   if (trInput.value.trim()) translate(true); else hideResult();
 });
@@ -278,18 +296,7 @@ trInput.addEventListener('input', () => {
 trInput.addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit(); }
 });
-$('trGo').addEventListener('click', submit);
 $('trClear').addEventListener('click', () => { trInput.value = ''; autoSize(); renderSuggest(); hideResult(); trInput.focus(); });
-$('trSpeakSrc').addEventListener('click', () => speak(trInput.value, state.from));
-$('trMic').addEventListener('click', () => {
-  if (recog) { stopListening(); return; }
-  const ok = listen(state.from, (txt) => { trInput.value = txt; autoSize(); }, (fin) => {
-    $('trMic').classList.remove('live');
-    if (fin) submit();
-  });
-  if (ok) $('trMic').classList.add('live');
-  else { toast('Usa el micrófono del teclado para dictar 🎤'); trInput.focus(); }
-});
 
 function submit() {
   clearTimeout(liveTimer);
@@ -303,24 +310,25 @@ function renderSuggest() {
   const ul = $('suggest');
   const v = trInput.value;
   if (/\s\S+\s/.test(v.trim()) || document.activeElement !== trInput) { ul.innerHTML = ''; return; }
-  const list = suggestions(v, state.from).filter((k) => fold(k) !== fold(v)).slice(0, 5);
-  ul.innerHTML = list.map((k) => `<li data-k="${esc(k)}"><b>${esc(k)}</b><span>${esc(DICT[state.from][k].slice(0, 3).join(', '))}</span></li>`).join('');
+  const list = suggestions(v, state.from).filter((k) => fold(k) !== fold(v));
+  ul.innerHTML = list.map((k) => `<li data-k="${esc(k)}"><span style="color:inherit">${esc(lc(k))}</span><span>${esc(uniq(DICT[state.from][k].map(lc)).slice(0, 3).join(', '))}</span></li>`).join('');
 }
 $('suggest').addEventListener('click', (e) => {
   const li = e.target.closest('li');
   if (!li) return;
-  trInput.value = li.dataset.k;
+  trInput.value = lc(li.dataset.k);
   autoSize();
   submit();
 });
 
 function hideResult() { $('trResult').hidden = true; current = null; }
 
-// final = el usuario lo ha pedido (Enter/botón): se guarda en recientes
+// final = el usuario lo ha pedido (tecla Ir o sugerencia): se guarda en recientes al momento
 async function translate(final, autoNote) {
   const text = trInput.value.trim();
   if (!text) return;
   const id = ++reqId;
+  clearTimeout(histTimer);
   let from = state.from;
   let hit = dictLookup(text, from);
   let note = autoNote || '';
@@ -336,87 +344,121 @@ async function translate(final, autoNote) {
     }
   }
   const to = other(from);
-  const res = { from, text, tr: '', alts: [], note, lemma: hit && hit.lemma, formDesc: hit && hit.formDesc, src: '' };
+  const res = { from, text: lc(text), tr: '', alts: [], note, lemma: hit && hit.lemma, error: '' };
+  const mine = state.mine[from + '|' + fold(text)];
+  if (mine) {                                    // la que escribiste tú manda
+    res.tr = mine;
+    res.alts = hit ? hit.tr.filter((x) => fold(x) !== fold(mine)) : [];
+    res.mine = true;
+    showResult(res, false);
+    if (final) addHistory(res); else histTimer = setTimeout(() => { if (current === res) addHistory(res); }, 2500);
+    return;
+  }
   if (hit) {
     res.tr = hit.tr[0];
     res.alts = hit.tr.slice(1);
-    res.src = 'Diccionario';
-    if (hit.lemma) res.note = (note ? note + ' · ' : '') + `«${text}» es ${hit.formDesc === 'forma' ? 'una forma' : hit.formDesc} de «${hit.lemma}»`;
+    if (hit.lemma) res.note = (note ? note + ' · ' : '') + `«${lc(text)}» es ${hit.formDesc === 'forma' ? 'una forma' : hit.formDesc} de «${hit.lemma}»`;
   }
   showResult(res, !hit);
-  let on = await onlineTranslate(text, from, to);
+  const on = await onlineTranslate(text, from, to);
   if (id !== reqId) return;
-  if (on && on.detected && !autoNote) {
+  if (on && on.detected && !hit && !autoNote) {
     // Frase escrita en el otro idioma: se cambia el sentido y se traduce otra vez
     state.from = to; save(); renderLangbar();
     return translate(final, `Detectado: ${LANG[to].name.toLowerCase()}`);
   }
-  if (on) {
-    const t = on.text;
-    if (!hit) { res.tr = t; res.src = on.src === 'guardada' ? 'Traducción guardada' : 'Traducción online (Google)'; }
-    else if (words > 1 || fold(t) !== fold(res.tr)) {
-      // la online suele acertar el sentido más común; el diccionario aporta las demás
-      const all = [res.tr, ...res.alts].filter((x) => fold(x) !== fold(t));
-      res.alts = all;
-      res.tr = t;
-      res.src = 'Online + diccionario';
+  if (on && on.text) {
+    if (!hit) res.tr = on.text;
+    else if (words >= 3) { res.alts = uniq([res.tr, ...res.alts]).filter((x) => fold(x) !== fold(on.text)); res.tr = on.text; }
+    else {
+      // Palabra suelta: manda el diccionario (Google a veces la toma por un nombre propio:
+      // "Stella" -> "Estela"). Si Google coincide con una de sus acepciones, esa va primero.
+      const all = [res.tr, ...res.alts];
+      const i = all.findIndex((x) => fold(x) === fold(on.text));
+      if (i > 0) { all.unshift(all.splice(i, 1)[0]); res.tr = all[0]; res.alts = all.slice(1); }
     }
   } else if (!hit) {
-    res.tr = '';
-    res.src = 'No hay conexión (o el servicio no responde). Sin internet funcionan las palabras del diccionario y las frases ya traducidas antes.';
+    res.error = navigator.onLine ? 'No se ha podido traducir. Inténtalo de nuevo.' : 'Sin conexión. Sin internet solo se traducen palabras del diccionario y frases ya traducidas antes.';
   }
   showResult(res, false);
-  if (final && res.tr) addHistory(res);
+  if (res.tr) {
+    if (final) addHistory(res);
+    else histTimer = setTimeout(() => { if (current === res) addHistory(res); }, 2500);
+  }
 }
 
 function showResult(res, loading) {
   current = res;
   $('trResult').hidden = false;
-  const to = other(res.from);
-  $('resMain').innerHTML = `<span class="lbl">${LANG[to].flag} ${LANG[to].name}</span>${loading ? '<span class="muted">Traduciendo…</span>' : esc(res.tr || '—')}`;
+  const main = $('resMain');
+  if (document.activeElement !== main) {
+    main.value = loading ? '' : res.tr;
+    main.placeholder = loading ? 'Traduciendo…' : (res.error ? res.error + ' Puedes escribir tú la traducción.' : 'Escribe la traducción');
+    sizeRes();
+  }
+  $('resAlts').textContent = loading ? '' : res.alts.slice(0, 6).join(', ');
+  if (res.mine) res.note = 'Tu traducción';
   $('resNote').textContent = res.note || '';
-  $('resAlts').innerHTML = res.alts.slice(0, 8).map((a) => `<button>${esc(a)}</button>`).join('');
-  $('resSource').textContent = loading ? '' : res.src;
-  // WordReference no deja consultarse desde otra web: se abre su página en Safari
-  const wr = $('resWR');
-  wr.hidden = loading || norm(res.text).split(' ').length > 3;
-  wr.href = `https://www.wordreference.com/${res.from === 'es' ? 'esit' : 'ites'}/${encodeURIComponent(norm(res.text))}`;
-  $('resStar').hidden = !res.tr;
-  $('resSpeak').hidden = !res.tr;
-  $('resStar').classList.toggle('on', !!findFav(res.from, res.text));
-  $('resStar').textContent = findFav(res.from, res.text) ? '★' : '☆';
-  // ¿Hay un verbo italiano que conjugar?
-  const verb = italianVerbOf(res);
+  const has = !loading && !!res.tr;
+  $('resStar').hidden = !has;
+  $('resSpeak').hidden = !has;
+  setStar($('resStar'), !!findFav(res.from, res.text));
+  const verb = has && italianVerbOf(res);
   $('resVerb').hidden = !verb;
-  if (verb) { $('resVerb').textContent = `Ver conjugación de «${verb}» →`; $('resVerb').dataset.v = verb; }
+  if (verb) { $('resVerb').textContent = `Conjugar «${verb}»`; $('resVerb').dataset.v = verb; }
+  // WordReference no deja consultarse desde otra web: se abre su página
+  const wr = $('resWR');
+  wr.hidden = loading || words(res.text) > 3;
+  wr.href = `https://www.wordreference.com/${res.from === 'es' ? 'esit' : 'ites'}/${encodeURIComponent(norm(res.text))}`;
+  $('resVerb').parentElement.classList.toggle('none', wr.hidden && !verb);
 }
+const words = (s) => norm(s).split(' ').length;
 function italianVerbOf(res) {
   const cands = res.from === 'it' ? [res.lemma, norm(res.text)] : [norm(res.tr), ...res.alts.map(norm)];
   return cands.find((c) => c && /(are|ere|ire|rre|rsi)$/.test(c) && (c in VERBS || c.replace(/rsi$/, 're') in VERBS)) || null;
 }
-$('resSpeak').addEventListener('click', () => current && speak(current.tr, other(current.from)));
-$('resAlts').addEventListener('click', (e) => {
-  const b = e.target.closest('button');
-  if (b) speak(b.textContent, other(current.from));
+// La traducción se puede corregir a mano (p. ej. tras mirarla en WordReference):
+// se guarda como "tuya", manda en próximas búsquedas y actualiza el favorito si lo es.
+const resMain = $('resMain');
+function sizeRes() { resMain.style.height = 'auto'; resMain.style.height = resMain.scrollHeight + 'px'; }
+resMain.addEventListener('input', () => {
+  sizeRes();
+  if (!current) return;
+  current.tr = resMain.value.trim();
+  $('resStar').hidden = $('resSpeak').hidden = !current.tr;
 });
+resMain.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); resMain.blur(); } });
+resMain.addEventListener('change', () => {
+  if (!current) return;
+  const tr = lc(resMain.value);
+  const key = current.from + '|' + fold(current.text);
+  if (!tr) { delete state.mine[key]; save(); return; }
+  current.tr = tr; current.mine = true; current.error = '';
+  state.mine[key] = tr;
+  const f = findFav(current.from, current.text);
+  if (f) { f.tr = tr; f.alts = (f.alts || []).filter((x) => fold(x) !== fold(tr)); }
+  for (const h of state.hist) if (h.from === current.from && fold(h.text) === fold(current.text)) h.tr = tr;
+  save();
+  renderHistory();
+  showResult(current, false);
+  toast(f ? 'Traducción corregida en favoritos' : 'Traducción guardada');
+});
+$('resSpeak').addEventListener('click', () => current && speak(current.tr, other(current.from)));
 $('resVerb').addEventListener('click', () => { showTab('vb'); showVerb($('resVerb').dataset.v); });
 $('resStar').addEventListener('click', () => {
   if (!current || !current.tr) return;
   const f = findFav(current.from, current.text);
-  if (f) {
-    state.favs = state.favs.filter((x) => x !== f);
-    toast('Quitado de favoritos');
-  } else {
-    state.favs.push({ id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6), from: current.from, text: current.text.trim(), tr: current.tr, alts: current.alts.slice(0, 6), t: Date.now(), ok: 0, ko: 0 });
-    toast('★ Guardado en favoritos');
-    addHistory(current);
-  }
+  if (f) state.favs = state.favs.filter((x) => x !== f);
+  else { addFav(current.from, current.text, current.tr, current.alts); addHistory(current); toast('Guardado en favoritos'); }
   save();
   showResult(current, false);
   renderHistory();
 });
 
 function findFav(from, text) { const f = fold(text); return state.favs.find((x) => x.from === from && fold(x.text) === f); }
+function addFav(from, text, tr, alts) {
+  state.favs.push({ id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6), from, text: lc(text), tr: lc(tr), alts: (alts || []).slice(0, 6).map(lc), t: Date.now(), ok: 0, ko: 0 });
+}
 
 function addHistory(res) {
   state.hist = state.hist.filter((h) => !(h.from === res.from && fold(h.text) === fold(res.text)));
@@ -426,22 +468,20 @@ function addHistory(res) {
   renderHistory();
 }
 function renderHistory() {
-  const ul = $('histList');
   $('histTitle').hidden = !state.hist.length;
-  ul.innerHTML = state.hist.map((h, i) => {
-    const fav = findFav(h.from, h.text);
-    return `<li data-i="${i}"><span>${LANG[h.from].flag}</span><div class="t"><b>${esc(h.text)}</b><div>${esc(h.tr)}</div></div><button class="mini-star ${fav ? 'on' : ''}" data-star="${i}">${fav ? '★' : '☆'}</button></li>`;
+  $('histList').innerHTML = state.hist.map((h, i) => {
+    const fav = !!findFav(h.from, h.text);
+    return `<li data-i="${i}"><div class="row"><span class="a">${esc(h.text)}</span><span class="b">${esc(h.tr)}</span>` +
+      `<button class="icon${fav ? ' on' : ''}" data-star aria-label="Favorito">${ICON(fav ? 'star-fill' : 'star')}</button></div></li>`;
   }).join('');
 }
 $('histList').addEventListener('click', (e) => {
-  const star = e.target.closest('[data-star]');
   const li = e.target.closest('li');
   if (!li) return;
   const h = state.hist[+li.dataset.i];
-  if (star) {
+  if (e.target.closest('[data-star]')) {
     const f = findFav(h.from, h.text);
-    if (f) state.favs = state.favs.filter((x) => x !== f);
-    else state.favs.push({ id: Date.now().toString(36), from: h.from, text: h.text, tr: h.tr, alts: h.alts || [], t: Date.now(), ok: 0, ko: 0 });
+    if (f) state.favs = state.favs.filter((x) => x !== f); else addFav(h.from, h.text, h.tr, h.alts);
     save(); renderHistory();
     if (current) showResult(current, false);
     return;
@@ -462,18 +502,13 @@ const vbInput = $('vbInput');
 const PRON = ['io', 'tu', 'lui/lei', 'noi', 'voi', 'loro'];
 const REFL = ['mi', 'ti', 'si', 'ci', 'vi', 'si'];
 const TENSE_INFO = [
-  ['pres', 'Presente', 'Presente de indicativo'],
-  ['rem', 'Passato remoto', 'Pretérito perfecto simple (hablé)'],
-  ['fut', 'Futuro semplice', 'Futuro simple'],
-  ['cond', 'Condizionale presente', 'Condicional simple'],
-  ['cpres', 'Congiuntivo presente', 'Presente de subjuntivo'],
-  ['cimp', 'Congiuntivo imperfetto', 'Pretérito imperfecto de subjuntivo'],
+  ['pres', 'Presente', 'presente'],
+  ['imp', 'Imperfetto', 'pretérito imperfecto'],
+  ['fut', 'Futuro semplice', 'futuro simple'],
+  ['cond', 'Condizionale', 'condicional simple'],
+  ['cpres', 'Congiuntivo presente', 'presente de subjuntivo'],
+  ['cimp', 'Congiuntivo imperfetto', 'imperfecto de subjuntivo'],
 ];
-const TENSE_MORE = [
-  ['pp', 'Passato prossimo', 'Pretérito perfecto compuesto (he hablado) — el pasado más usado al hablar'],
-  ['imp', 'Imperfetto', 'Pretérito imperfecto de indicativo (hablaba)'],
-];
-const AUX_PRES = { avere: ['ho', 'hai', 'ha', 'abbiamo', 'avete', 'hanno'], essere: ['sono', 'sei', 'è', 'siamo', 'siete', 'sono'] };
 const VERB_LIST = Object.keys(VERBS).sort();
 
 vbInput.addEventListener('input', renderVbSuggest);
@@ -489,11 +524,10 @@ function renderVbSuggest() {
   for (let i = lo; i < VERB_LIST.length && all.length < 400 && VERB_LIST[i].startsWith(v); i++) all.push(VERB_LIST[i]);
   // primero los del diccionario y los más cortos (suelen ser los más comunes)
   const out = all.sort((a, b) => (b in DICT.it) - (a in DICT.it) || a.length - b.length || (a < b ? -1 : 1)).slice(0, 6);
-  // verbo español -> italiano
-  const es = DICT.es[norm(vbInput.value)];
+  const es = DICT.es[norm(vbInput.value)];                     // verbo español -> italiano
   const esV = es ? es.filter((x) => x in VERBS).slice(0, 2) : [];
-  ul.innerHTML = esV.map((x) => `<li data-k="${esc(x)}"><b>${esc(x)}</b><span>= ${esc(norm(vbInput.value))}</span></li>`).join('') +
-    out.filter((x) => !esV.includes(x)).map((x) => `<li data-k="${esc(x)}"><b>${esc(x)}</b><span>${esc((DICT.it[x] || []).slice(0, 3).join(', '))}</span></li>`).join('');
+  ul.innerHTML = esV.map((x) => `<li data-k="${esc(x)}"><span style="color:inherit">${esc(x)}</span><span>${esc(norm(vbInput.value))}</span></li>`).join('') +
+    out.filter((x) => !esV.includes(x)).map((x) => `<li data-k="${esc(x)}"><span style="color:inherit">${esc(x)}</span><span>${esc(uniq((DICT.it[x] || []).map(lc)).slice(0, 3).join(', '))}</span></li>`).join('');
 }
 $('vbSuggest').addEventListener('click', (e) => {
   const li = e.target.closest('li');
@@ -515,7 +549,7 @@ function resolveVerb(input) {
     else if (form) { note = `«${v}» es ${form.desc} de «${form.inf}»`; v = form.inf; }
     else if (es) { note = `«${v}» en italiano es «${es}»`; v = norm(es); }
   }
-  if (!/(are|ere|ire|rre|rsi)$/.test(v)) return { error: `«${input.trim()}» no parece un verbo italiano (deben acabar en -are, -ere, -ire o -rre).` };
+  if (!/(are|ere|ire|rre|rsi)$/.test(v)) return { error: `«${input.trim()}» no parece un verbo italiano (acaban en -are, -ere, -ire o -rre).` };
   const r = ItConj.lookup(v, VERBS);
   if (!r) return { error: `No sé conjugar «${v}».` };
   return { ...r, input: v, note };
@@ -530,94 +564,91 @@ function showVerb(input) {
   if (!r || r.error) { out.innerHTML = `<div class="card vb-warn">${esc(r ? r.error : 'Escribe un verbo.')}</div>`; return; }
   const { t, refl, known, input: name } = r;
   const reg = ItConj.regular(r.inf, t.pres[0].endsWith('isco'));
-  const es = DICT.it[name] || DICT.it[r.inf] || [];
-  const fav = findFav('it', name);
-  const rp = (n) => (refl ? REFL[n] + ' ' : '');   // reflexivo: mi lavo, mi sono lavato
-  const part = t.part;
-  const agree = (n) => (t.aux === 'essere' ? (n < 3 ? part.replace(/o$/, 'o/a') : part.replace(/o$/, 'i/e')) : part);
-  const cell = (k, n, f) => {
-    const irr = reg && reg[k] && reg[k][n] !== f && known;
-    return `<td class="p">${PRON[n]}</td><td class="f${irr ? ' irr' : ''}">${rp(n)}${esc(f)}</td>`;
-  };
+  const es = uniq((DICT.it[name] || DICT.it[r.inf] || []).map(lc));
+  const fav = !!findFav('it', name);
+  const rp = (n) => (refl ? REFL[n] + ' ' : '');   // reflexivo: mi lavo
   const table = (k, label, sub) => {
     let rows = '';
     for (let n = 0; n < 6; n++) {
-      if (k === 'pp') rows += `<tr><td class="p">${PRON[n]}</td><td class="f">${rp(n)}${AUX_PRES[t.aux][n]} ${esc(agree(n))}</td></tr>`;
-      else rows += `<tr>${cell(k, n, t[k][n])}</tr>`;
+      const f = t[k][n];
+      const irr = known && reg && reg[k] && reg[k][n] !== f;
+      rows += `<tr><td class="p">${PRON[n]}</td><td class="f${irr ? ' irr' : ''}">${rp(n)}${esc(f)}</td></tr>`;
     }
-    return `<div class="card tense" data-k="${k}"><h3>${label}<small>${sub}</small></h3><table>${rows}</table></div>`;
+    return `<div class="card tense"><h3>${label}<small>${sub}</small></h3><table>${rows}</table></div>`;
   };
   out.innerHTML =
-    `<div class="card"><div class="vb-head"><div class="grow"><h2>${esc(name)}</h2><div class="es">${esc(es.slice(0, 4).join(', ') || '')}</div></div>` +
-    `<button class="icon-btn" id="vbSpeak">🔊</button><button class="star ${fav ? 'on' : ''}" id="vbStar">${fav ? '★' : '☆'}</button></div>` +
+    `<div class="card"><div class="vb-head"><div class="grow"><h2>${esc(name)}</h2><div class="es">${esc(es.slice(0, 4).join(', '))}</div></div>` +
+    `<button class="icon" id="vbSpeak" aria-label="Escuchar">${ICON('speaker')}</button><button class="icon star${fav ? ' on' : ''}" id="vbStar" aria-label="Favorito">${ICON(fav ? 'star-fill' : 'star')}</button></div>` +
     (r.note ? `<div class="note">${esc(r.note)}</div>` : '') +
-    `<dl class="vb-meta"><dt>Participio</dt><dd class="${reg && reg.part !== part && known ? 'irr' : ''}">${esc(part)}</dd>` +
+    `<dl class="vb-meta"><dt>Participio</dt><dd class="${known && reg && reg.part !== t.part ? 'irr' : ''}">${esc(t.part)}</dd>` +
     `<dt>Gerundio</dt><dd>${esc(t.ger)}</dd><dt>Auxiliar</dt><dd>${t.aux}${t.aux2 ? ` <span class="muted">(también ${t.aux2})</span>` : ''}</dd></dl>` +
-    `<a class="wr" target="_blank" rel="noopener" href="https://www.wordreference.com/conj/itverbs.aspx?v=${encodeURIComponent(r.inf)}">Conjugación en WordReference ↗</a>` +
-    (known ? '' : `<div class="vb-warn">No está en mi lista de verbos: conjugación regular estimada, compruébala.</div>`) +
+    (known ? '' : `<div class="vb-warn">No está en mi lista de verbos: conjugación regular estimada.</div>`) +
+    `<a class="link vb-link" target="_blank" rel="noopener" href="https://www.wordreference.com/conj/itverbs.aspx?v=${encodeURIComponent(r.inf)}">Conjugación en WordReference</a>` +
     `</div>` +
-    TENSE_INFO.map(([k, a, b]) => table(k, a, b)).join('') +
-    `<div class="more-title">Más tiempos útiles</div>` +
-    TENSE_MORE.map(([k, a, b]) => table(k, a, b)).join('');
+    TENSE_INFO.map(([k, a, b]) => table(k, a, b)).join('');
   $('vbSpeak').addEventListener('click', () => speak(name, 'it'));
   $('vbStar').addEventListener('click', () => {
     const f = findFav('it', name);
     if (f) state.favs = state.favs.filter((x) => x !== f);
-    else state.favs.push({ id: Date.now().toString(36), from: 'it', text: name, tr: es[0] || '', alts: es.slice(1, 6), t: Date.now(), ok: 0, ko: 0 });
-    if (!f && !es[0]) toast('Sin traducción: añádelo desde Traducir');
+    else if (es[0]) addFav('it', name, es[0], es.slice(1));
+    else { toast('Sin traducción: añádelo desde Traducir'); return; }
     save();
     showVerb(name);
   });
-  out.querySelectorAll('td.f').forEach((td) => td.addEventListener('click', () => speak(td.textContent.replace('/a', '').replace('/e', ''), 'it')));
+  out.querySelectorAll('td.f').forEach((td) => td.addEventListener('click', () => speak(td.textContent, 'it')));
   window.scrollTo(0, 0);
 }
 
 // ================= FAVORITOS =================
 let openRow = null;
 onSeg($('fvSort'), (v) => { state.fvSort = v; save(); renderFavs(); });
+onSeg($('fvDir'), (v) => { state.fvDir = v; save(); renderFavs(); });
 $('fvSearch').addEventListener('input', renderFavs);
 
-function sortedFavs(order) {
+// Pareja [palabra, traducción] según la dirección elegida (ES → IT pone primero el español)
+function pair(f, dir) {
+  if (dir === 'mix' || dir === f.from) return [f.text, f.tr];
+  return [f.tr, f.text];
+}
+function sortedFavs(order, dir = 'mix') {
   const a = state.favs.slice();
   if (order === 'old') a.sort((x, y) => x.t - y.t);
-  else if (order === 'az') a.sort((x, y) => fold(x.text).localeCompare(fold(y.text), 'es'));
+  else if (order === 'az') a.sort((x, y) => fold(pair(x, dir)[0]).localeCompare(fold(pair(y, dir)[0]), 'es'));
   else a.sort((x, y) => y.t - x.t);
   return a;
 }
 function renderFavs() {
   setSeg($('fvSort'), state.fvSort);
+  setSeg($('fvDir'), state.fvDir);
   const q = fold($('fvSearch').value);
-  const list = sortedFavs(state.fvSort).filter((f) => !q || fold(f.text).includes(q) || fold(f.tr).includes(q));
+  const list = sortedFavs(state.fvSort, state.fvDir).filter((f) => !q || fold(f.text).includes(q) || fold(f.tr).includes(q));
   openRow = null;
   $('fvList').innerHTML = list.map((f) => {
-    const tot = f.ok + f.ko;
-    return `<li class="fv-row" data-id="${f.id}"><div class="swipe-delete"><span>Eliminar</span></div>` +
-      `<div class="fv-front"><span class="flag">${LANG[f.from].flag}</span><div class="t"><b>${esc(f.text)}</b><div>${esc(f.tr)}</div></div>` +
-      `<div class="stat">${tot ? `${f.ok}/${tot} ✓` : ''}<br>${new Date(f.t).toLocaleDateString('es-ES', { day: 'numeric', month: 'short' })}</div></div></li>`;
+    const [a, b] = pair(f, state.fvDir);
+    return `<li data-id="${f.id}"><div class="swipe-delete"><span>Eliminar</span></div><div class="row"><span class="a">${esc(a)}</span><span class="b">${esc(b)}</span></div></li>`;
   }).join('');
   $('fvCount').textContent = state.favs.length ? `${state.favs.length} ${state.favs.length === 1 ? 'favorito' : 'favoritos'}` + (q ? ` · ${list.length} encontrados` : '') : '';
   $('fvEmpty').hidden = state.favs.length > 0;
-  $('fvHint').hidden = state.favs.length === 0;
 }
 
 // Deslizar a la izquierda para eliminar (como en iPhone): corto muestra el botón, largo borra
 const SWIPE_REVEAL = 92, SWIPE_DELETE_RATIO = 0.55;
 let sw = null, suppressClick = false;
 const fvList = $('fvList');
-function setOffset(row, x) {
-  const full = x < -row.offsetWidth * SWIPE_DELETE_RATIO;
-  row.querySelector('.fv-front').style.transform = x ? `translate3d(${x}px,0,0)` : '';
-  const btn = row.querySelector('.swipe-delete');
+function setOffset(li, x) {
+  const full = x < -li.offsetWidth * SWIPE_DELETE_RATIO;
+  li.querySelector('.row').style.transform = x ? `translate3d(${x}px,0,0)` : '';
+  const btn = li.querySelector('.swipe-delete');
   btn.style.width = `${-x}px`;
   btn.firstChild.style.transform = full ? `translate3d(${x + SWIPE_REVEAL}px,0,0)` : '';
 }
-function closeRow(row = openRow) { if (row) setOffset(row, 0); if (row === openRow) openRow = null; }
-function removeRow(row) {
-  const id = row.dataset.id;
-  row.classList.remove('swiping');
-  setOffset(row, -row.offsetWidth);
-  row.style.height = row.offsetHeight + 'px';
-  requestAnimationFrame(() => { row.classList.add('removing'); row.style.height = '0px'; });
+function closeRow(li = openRow) { if (li) setOffset(li, 0); if (li === openRow) openRow = null; }
+function removeRow(li) {
+  const id = li.dataset.id;
+  li.classList.remove('swiping');
+  setOffset(li, -li.offsetWidth);
+  li.style.height = li.offsetHeight + 'px';
+  requestAnimationFrame(() => { li.classList.add('removing'); li.style.height = '0px'; });
   state.favs = state.favs.filter((f) => f.id !== id);
   save();
   openRow = null;
@@ -625,11 +656,11 @@ function removeRow(row) {
 }
 fvList.addEventListener('touchstart', (e) => {
   suppressClick = false;
-  const row = e.target.closest('.fv-row');
-  if (openRow && row !== openRow) { closeRow(); suppressClick = true; sw = null; return; }
-  if (!row || e.touches.length !== 1) { sw = null; return; }
+  const li = e.target.closest('li');
+  if (openRow && li !== openRow) { closeRow(); suppressClick = true; sw = null; return; }
+  if (!li || e.touches.length !== 1) { sw = null; return; }
   const t = e.touches[0];
-  sw = { row, x0: t.clientX, y0: t.clientY, base: row === openRow ? -SWIPE_REVEAL : 0, x: 0, on: false };
+  sw = { li, x0: t.clientX, y0: t.clientY, base: li === openRow ? -SWIPE_REVEAL : 0, x: 0, on: false };
 }, { passive: true });
 fvList.addEventListener('touchmove', (e) => {
   if (!sw) return;
@@ -637,20 +668,20 @@ fvList.addEventListener('touchmove', (e) => {
   const dx = t.clientX - sw.x0, dy = t.clientY - sw.y0;
   if (!sw.on) {
     if (Math.abs(dx) < 8 && Math.abs(dy) < 8) return;
-    if (Math.abs(dx) > Math.abs(dy) && (dx < 0 || sw.base)) { sw.on = true; sw.x0 = t.clientX; sw.row.classList.add('swiping'); suppressClick = true; }
+    if (Math.abs(dx) > Math.abs(dy) && (dx < 0 || sw.base)) { sw.on = true; sw.x0 = t.clientX; sw.li.classList.add('swiping'); suppressClick = true; }
     else { sw = null; return; }
   }
   if (e.cancelable) e.preventDefault();
-  sw.x = Math.max(-sw.row.offsetWidth, Math.min(0, sw.base + t.clientX - sw.x0));
-  setOffset(sw.row, sw.x);
+  sw.x = Math.max(-sw.li.offsetWidth, Math.min(0, sw.base + t.clientX - sw.x0));
+  setOffset(sw.li, sw.x);
 }, { passive: false });
 function endSwipe() {
   if (!sw || !sw.on) { sw = null; return; }
-  const { row, x } = sw;
-  row.classList.remove('swiping');
-  if (x < -row.offsetWidth * SWIPE_DELETE_RATIO) removeRow(row);
-  else if (x < -SWIPE_REVEAL / 2) { setOffset(row, -SWIPE_REVEAL); openRow = row; }
-  else closeRow(row);
+  const { li, x } = sw;
+  li.classList.remove('swiping');
+  if (x < -li.offsetWidth * SWIPE_DELETE_RATIO) removeRow(li);
+  else if (x < -SWIPE_REVEAL / 2) { setOffset(li, -SWIPE_REVEAL); openRow = li; }
+  else closeRow(li);
   sw = null;
 }
 fvList.addEventListener('touchend', endSwipe);
@@ -658,11 +689,11 @@ fvList.addEventListener('touchcancel', endSwipe);
 document.addEventListener('touchstart', (e) => { if (openRow && !fvList.contains(e.target)) closeRow(); }, { passive: true });
 fvList.addEventListener('click', (e) => {
   if (suppressClick) { suppressClick = false; return; }
-  const row = e.target.closest('.fv-row');
-  if (!row) return;
-  if (e.target.closest('.swipe-delete')) { removeRow(row); return; }
+  const li = e.target.closest('li');
+  if (!li) return;
+  if (e.target.closest('.swipe-delete')) { removeRow(li); return; }
   if (openRow) { closeRow(); return; }
-  const f = state.favs.find((x) => x.id === row.dataset.id);
+  const f = state.favs.find((x) => x.id === li.dataset.id);
   if (f) openInTranslator(f.from, f.text);
 });
 
@@ -688,7 +719,7 @@ $('importFile').addEventListener('change', async (e) => {
     let added = 0;
     for (const f of d.favs) {
       if (!f || !f.text || !f.from || findFav(f.from, f.text)) continue;
-      state.favs.push({ ok: 0, ko: 0, alts: [], t: Date.now(), ...f, id: f.id || Date.now().toString(36) + added });
+      state.favs.push({ ok: 0, ko: 0, alts: [], t: Date.now(), ...f, text: lc(f.text), tr: lc(f.tr), id: f.id || Date.now().toString(36) + added });
       added++;
     }
     save(); renderFavs();
@@ -697,7 +728,7 @@ $('importFile').addEventListener('change', async (e) => {
 });
 
 // ================= EJERCICIOS =================
-let run = null;   // {items:[{fav, from, prompt, answers}], i, ok, results:[]}
+let run = null;   // {items:[{id, from, prompt, answers}], i, ok, results:[]}
 onSeg($('exN'), (v) => { state.ex.n = +v; save(); renderExSetup(); });
 onSeg($('exOrder'), (v) => { state.ex.order = v; save(); });
 onSeg($('exDir'), (v) => { state.ex.dir = v; save(); });
@@ -708,10 +739,10 @@ function renderExSetup() {
   setSeg($('exN'), state.ex.n); setSeg($('exOrder'), state.ex.order); setSeg($('exDir'), state.ex.dir); setSeg($('exMode'), state.ex.mode);
   const n = state.favs.length;
   $('exStart').disabled = n === 0;
-  $('exInfo').textContent = n === 0 ? 'Primero guarda palabras en favoritos (☆).' :
+  $('exInfo').textContent = n === 0 ? 'Primero guarda palabras en favoritos.' :
     n < state.ex.n ? `Tienes ${n} favoritos: la serie tendrá ${n}.` : `${n} favoritos disponibles.`;
-  if (state.ex.mode === 'speak' && !SR) $('exInfo').textContent += ' Para hablar se usará el dictado del teclado 🎤.';
-  $('exLast').textContent = state.last ? `Última serie: ${state.last.ok}/${state.last.n} (${Math.round(state.last.ok / state.last.n * 100)} %)` : '';
+  if (state.ex.mode === 'speak' && !SR) $('exInfo').textContent += ' Para hablar usa el dictado del teclado.';
+  $('exLast').textContent = state.last ? `Última serie: ${state.last.ok} de ${state.last.n} (${Math.round(state.last.ok / state.last.n * 100)} %)` : '';
 }
 
 // Respuestas válidas para una ficha en una dirección
@@ -719,24 +750,18 @@ function answersFor(fav, from) {
   if (fav.from === from) return { prompt: fav.text, answers: [fav.tr, ...(fav.alts || [])].filter(Boolean) };
   // al revés: se pregunta la traducción y vale la palabra original o lo que diga el diccionario
   const rev = (dictLookup(fav.tr, other(fav.from)) || {}).tr || [];
-  return { prompt: fav.tr, answers: [fav.text, ...rev] };
-}
-function buildItems(favs) {
-  return favs.map((fav) => {
-    const from = state.ex.dir === 'mix' ? (Math.random() < 0.5 ? 'es' : 'it') : state.ex.dir;
-    const { prompt, answers } = answersFor(fav, from);
-    return { id: fav.id, from, prompt, answers };
-  });
+  return { prompt: fav.tr, answers: uniq([fav.text, ...rev]) };
 }
 function shuffle(a) { for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; }
 
 $('exStart').addEventListener('click', () => {
   const favs = state.favs.filter((f) => f.tr);
   if (!favs.length) return;
-  let pick;
-  if (state.ex.order === 'rnd') pick = shuffle(favs.slice()).slice(0, state.ex.n);
-  else pick = sortedFavs(state.ex.order).filter((f) => f.tr).slice(0, state.ex.n);
-  startRun(buildItems(pick));
+  const pick = state.ex.order === 'rnd' ? shuffle(favs.slice()).slice(0, state.ex.n) : sortedFavs(state.ex.order).filter((f) => f.tr).slice(0, state.ex.n);
+  startRun(pick.map((fav) => {
+    const from = state.ex.dir === 'mix' ? (Math.random() < 0.5 ? 'es' : 'it') : state.ex.dir;
+    return { id: fav.id, from, ...answersFor(fav, from) };
+  }));
 });
 function startRun(items) {
   run = { items, i: 0, ok: 0, results: [] };
@@ -748,25 +773,26 @@ $('exQuit').addEventListener('click', () => { stopListening(); run = null; rende
 function showQuestion() {
   const it = run.items[run.i];
   const to = other(it.from);
-  $('exProg').textContent = `${run.i + 1} / ${run.items.length}`;
-  $('exScore').textContent = `✓ ${run.ok}`;
+  $('exProg').textContent = `${run.i + 1} de ${run.items.length}`;
+  $('exScore').textContent = `${run.ok} ✓`;
   $('exBar').style.width = `${(run.i / run.items.length) * 100}%`;
-  $('exAsk').textContent = `${LANG[it.from].flag} ${LANG[it.from].name}`;
+  $('exDirLabel').textContent = state.ex.dir === 'mix' ? `${LANG[it.from].name} → ${LANG[to].name.toLowerCase()}` : '';
   $('exWord').textContent = it.prompt;
-  $('exTarget').textContent = `Tradúcelo al ${LANG[to].name.toLowerCase()} ${LANG[to].flag}`;
   const a = $('exAnswer');
-  a.value = ''; a.className = 'ex-answer'; a.disabled = false; a.lang = to;
-  a.placeholder = to === 'it' ? 'Scrivi in italiano' : 'Escribe en español';
+  a.value = ''; a.className = 'box ex-answer'; a.disabled = false; a.lang = to;
+  a.placeholder = to === 'it' ? 'In italiano' : 'En español';
   $('exFeedback').hidden = true;
   $('exCheck').hidden = false; $('exSkip').hidden = false; $('exNext').hidden = true;
   const speakMode = state.ex.mode === 'speak';
   $('exMic').hidden = !speakMode;
   $('exMic').classList.remove('live');
-  $('exMicLabel').textContent = SR ? 'Toca y habla' : 'Usa el 🎤 del teclado';
+  $('exMicLabel').hidden = !speakMode;
+  $('exMicLabel').textContent = SR ? 'Toca y habla' : 'Usa el micrófono del teclado';
   if (!speakMode) setTimeout(() => a.focus(), 50);
-  if (it.from === 'it') speak(it.prompt, 'it');
 }
 $('exSpeak').addEventListener('click', () => { const it = run && run.items[run.i]; if (it) speak(it.prompt, it.from); });
+$('exSolSpeak').addEventListener('click', () => { const it = run && run.items[run.i]; if (it) speak(it.answers[0], other(it.from)); });
+$('exVerdict').addEventListener('click', (e) => { if (e.target.closest('.icon')) $('exSolSpeak').click(); });
 $('exAnswer').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); if (!$('exNext').hidden) nextQuestion(); else checkAnswer(); } });
 $('exCheck').addEventListener('click', () => checkAnswer());
 $('exSkip').addEventListener('click', () => checkAnswer(true));
@@ -775,16 +801,15 @@ $('exMic').addEventListener('click', () => {
   if (!run || !$('exNext').hidden) return;
   if (recog) { stopListening(); return; }
   const it = run.items[run.i];
-  const ok = listen(other(it.from), (txt, fin, alts) => {
-    $('exAnswer').value = txt;
-    if (fin && alts) run.altHeard = Array.from(alts).map((x) => x.transcript);
-  }, (fin) => {
+  const q = run.i;
+  const ok = listen(other(it.from), (txt) => { $('exAnswer').value = txt; }, (heard, alts) => {
     $('exMic').classList.remove('live');
     $('exMicLabel').textContent = 'Toca y habla';
-    if (fin && run && $('exNext').hidden) checkAnswer();
+    if (!run || run.i !== q || !$('exNext').hidden) return;
+    if (heard) { $('exAnswer').value = heard; run.altHeard = alts; checkAnswer(); }
   });
   if (ok) { $('exMic').classList.add('live'); $('exMicLabel').textContent = 'Escuchando…'; }
-  else { $('exAnswer').focus(); toast('Toca el 🎤 del teclado y habla'); }
+  else { $('exAnswer').focus(); toast('Toca el micrófono del teclado y habla'); }
 });
 
 // Compara la respuesta: exacta, sin acentos (vale, con aviso) o casi (1 letra: no vale)
@@ -793,18 +818,16 @@ function grade(given, answers, heard) {
   if (!g) return { ok: false };
   const tries = [g, ...(heard || []).map(norm)];
   const expand = answers.flatMap((a) => [a, ...a.split(/\s*[,/;]\s*|\s+o\s+/)]).filter(Boolean);
-  for (const t of tries) {
-    for (const a of expand) {
-      const n = norm(a);
-      if (t === n || t.replace(ARTICLES, '') === n.replace(ARTICLES, '')) return { ok: true, match: a };
-    }
+  for (const t of tries) for (const a of expand) {
+    const n = norm(a);
+    if (t === n || t.replace(ARTICLES, '') === n.replace(ARTICLES, '')) return { ok: true, match: a };
   }
-  for (const t of tries) for (const a of expand) if (bare(t) === bare(a)) return { ok: true, match: a, accent: fold(t) === fold(a) && norm(t) !== norm(a) };
+  for (const t of tries) for (const a of expand) if (bare(t) === bare(a)) return { ok: true, match: a, accent: true };
   for (const a of expand) if (bare(a).length >= 4 && lev(bare(g), bare(a)) === 1) return { ok: false, close: a };
   return { ok: false };
 }
 function checkAnswer(skip) {
-  if (!run) return;
+  if (!run || !$('exNext').hidden) return;
   stopListening();
   const it = run.items[run.i];
   const given = skip ? '' : $('exAnswer').value;
@@ -818,18 +841,20 @@ function checkAnswer(skip) {
   const a = $('exAnswer');
   a.disabled = true;
   a.classList.add(r.ok ? 'ok' : 'ko');
-  const fb = $('exFeedback');
-  fb.hidden = false;
-  fb.className = 'feedback ' + (r.ok ? 'ok' : 'ko');
   const main = it.answers[0];
-  const extra = it.answers.slice(1, 4).filter((x) => fold(x) !== fold(main));
-  if (r.ok) fb.innerHTML = `✓ <b>¡Correcto!</b>${r.accent ? `<br>Ojo con el acento: <b>${esc(r.match)}</b>` : (fold(r.match) !== fold(main) ? `<br>También: ${esc(main)}` : '')}`;
-  else fb.innerHTML = `${r.close ? '¡Casi! ' : skip ? '' : '✗ '}La respuesta es <b>${esc(main)}</b>${extra.length ? `<br><span class="muted">También: ${esc(extra.join(', '))}</span>` : ''}`;
-  $('exScore').textContent = `✓ ${run.ok}`;
+  const v = $('exVerdict');
+  v.className = 'verdict ' + (r.ok ? 'ok' : 'ko');
+  if (r.ok) v.innerHTML = `Correcto${r.accent ? ` · ojo con el acento: ${esc(r.match)}` : ''}<button class="icon" aria-label="Escuchar">${ICON('speaker')}</button>`;
+  else v.textContent = r.close ? 'Casi. La respuesta es:' : skip ? 'La respuesta es:' : 'Incorrecto. La respuesta es:';
+  $('exSolution').hidden = r.ok;
+  $('exSolText').textContent = main;
+  const extra = it.answers.slice(1, 4).filter((x) => fold(x) !== fold(main) && (!r.ok || fold(x) !== fold(r.match)));
+  $('exAlso').textContent = !r.ok && extra.length ? `También vale: ${extra.join(', ')}` : '';
+  $('exFeedback').hidden = false;
+  $('exScore').textContent = `${run.ok} ✓`;
   $('exCheck').hidden = true; $('exSkip').hidden = true; $('exNext').hidden = false;
-  $('exNext').textContent = run.i + 1 < run.items.length ? 'Siguiente →' : 'Ver resultado';
+  $('exNext').textContent = run.i + 1 < run.items.length ? 'Siguiente' : 'Ver resultado';
   $('exNext').focus();
-  speak(main, other(it.from));
 }
 function nextQuestion() {
   run.i++;
@@ -842,24 +867,22 @@ function finishRun() {
   $('exRun').hidden = true; $('exEnd').hidden = false;
   $('exRing').style.setProperty('--p', pct);
   $('exPct').textContent = pct + '%';
-  $('exEndMsg').textContent = pct === 100 ? 'Perfetto! 🎉' : pct >= 80 ? 'Bravissimo! 👏' : pct >= 50 ? 'Bene, continua così 💪' : 'Dai, riprova! 🙂';
+  $('exEndMsg').textContent = pct === 100 ? 'Perfetto!' : pct >= 80 ? 'Bravissimo!' : pct >= 50 ? 'Bene, continua così' : 'Dai, riprova!';
   $('exEndSub').textContent = `${ok} de ${n} aciertos`;
   $('exReview').innerHTML = run.results.map((r) =>
-    `<li><span class="mk ${r.ok ? 'ok' : 'ko'}">${r.ok ? '✓' : '✗'}</span><div class="t"><b>${esc(r.prompt)}</b> → ${esc(r.answers[0])}` +
-    (r.ok ? '' : `<div>${r.given ? `Tu respuesta: <span class="yours">${esc(r.given)}</span>` : 'Sin respuesta'}</div>`) + `</div></li>`).join('');
+    `<li><div class="row"><span class="mk ${r.ok ? 'ok' : 'ko'}">${r.ok ? '✓' : '✗'}</span><span class="a">${esc(r.prompt)}</span>` +
+    `<span class="b">${r.ok || !r.given ? '' : `<span class="yours">${esc(r.given)}</span>`}${esc(r.answers[0])}</span></div></li>`).join('');
   $('exRetry').hidden = ok === n;
   window.scrollTo(0, 0);
 }
 $('exRetry').addEventListener('click', () => {
-  const failed = run.results.filter((r) => !r.ok).map(({ id, from, prompt, answers }) => ({ id, from, prompt, answers }));
-  startRun(shuffle(failed));
+  startRun(shuffle(run.results.filter((r) => !r.ok).map(({ id, from, prompt, answers }) => ({ id, from, prompt, answers }))));
 });
 $('exAgain').addEventListener('click', () => { run = null; renderExSetup(); });
 
 // ---------- arranque ----------
 renderLangbar();
 renderHistory();
-updateNet();
 renderExSetup();
 if ('speechSynthesis' in window) speechSynthesis.getVoices();
 if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js');
