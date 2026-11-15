@@ -450,6 +450,7 @@ function showResult(res, loading) {
   wr.hidden = loading || words(res.text) > 3;
   wr.href = `https://www.wordreference.com/${res.from === 'es' ? 'esit' : 'ites'}/${encodeURIComponent(norm(res.text))}`;
   $('resVerb').parentElement.classList.toggle('none', wr.hidden && !verb);
+  sizeRes();   // al final: los iconos ya están puestos y el ancho es el definitivo
 }
 const words = (s) => norm(s).split(' ').length;
 function italianVerbOf(res) {
@@ -460,6 +461,7 @@ function italianVerbOf(res) {
 // se guarda como "tuya", manda en próximas búsquedas y actualiza el favorito si lo es.
 const resMain = $('resMain');
 function sizeRes() { resMain.style.height = 'auto'; resMain.style.height = resMain.scrollHeight + 'px'; }
+window.addEventListener('resize', sizeRes);
 resMain.addEventListener('input', () => {
   sizeRes();
   if (!current) return;
