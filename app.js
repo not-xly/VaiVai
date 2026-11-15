@@ -19,7 +19,7 @@ function defaults() {
     cache: {},             // traducciones online: "es|hola" -> texto
     mine: {},              // traducciones corregidas a mano: "es|hola" -> texto (mandan siempre)
     fvSort: 'new',
-    fvDir: 'es',
+    fvDir: 'it',
     ex: { n: 10, order: 'new', dir: 'es', mode: 'write' },
     last: null,            // última serie {ok, n, t}
   };
@@ -31,6 +31,7 @@ function load() {
     const s = JSON.parse(raw);
     const d = defaults();
     const st = { ...d, ...s, ex: { ...d.ex, ...(s.ex || {}) } };
+    if (!s.fvDirSet) { st.fvDir = 'it'; st.fvDirSet = true; }   // nuevo valor por defecto: IT → ES
     // minúscula inicial también en lo guardado antes
     for (const f of st.favs) {
       f.text = lc(f.text); f.tr = lc(f.tr); f.alts = (f.alts || []).map(lc);
@@ -199,52 +200,86 @@ function speak(text, lang) {
   speechSynthesis.speak(u);
 }
 
-// Reconocimiento de voz. En iPhone, Safari a veces no avisa de que la escucha ha
-// terminado (onend), y la siguiente ya no arrancaba. Ahora: se cancela siempre la
-// anterior, la respuesta se da por buena al llegar el resultado final o tras 1,4 s de
-// silencio, y cada botón sabe si está escuchando por su propio estado.
+// Reconocimiento de voz. En iPhone solo funcionaba la primera vez: crear una escucha
+// nueva mientras Safari aún cerraba la anterior (o cortarla con abort) la dejaba muda.
+// Ahora hay una sola instancia que se reutiliza; se para con stop() y se espera a que
+// termine; si Safari no avisa, a los 1,5 s se descarta y la próxima vez se crea otra.
+// Si en 6 s no llega nada, se avisa y se abre el teclado para usar su dictado.
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-let recog = null;
-function listen(lang, onText, onDone) {
-  if (!SR) return false;
-  if ('speechSynthesis' in window) speechSynthesis.cancel();
-  if (recog) { const old = recog; old.onresult = old.onend = old.onerror = null; try { old.abort(); } catch (e) { /* ya parado */ } recog = null; }
+let recog = null;      // instancia compartida
+let session = null;    // escucha en curso
+function getRecog() {
+  if (recog) return recog;
   const r = new SR();
-  recog = r;
-  r.lang = LANG[lang].bcp;
   r.interimResults = true;
   r.maxAlternatives = 3;
   r.continuous = false;
-  let last = '', alts = [], done = false, silence = 0;
-  const finish = () => {
-    if (done) return;
-    done = true;
-    clearTimeout(silence); clearTimeout(maxT);
-    if (recog === r) { recog = null; try { r.abort(); } catch (e) { /* ya parado */ } }
-    onDone(last.trim(), alts);
+  r.active = false;
+  r.onresult = (e) => { if (session && session.r === r) session.result(e); };
+  r.onerror = (e) => { if (session && session.r === r) session.error(e); };
+  r.onend = () => { r.active = false; if (session && session.r === r) session.finish(); };
+  return (recog = r);
+}
+function listen(lang, onText, onDone) {
+  if (!SR) return false;
+  if ('speechSynthesis' in window && speechSynthesis.speaking) speechSynthesis.cancel();
+  if (session) session.finish(true);          // cierra la anterior sin respuesta
+  const r = getRecog();
+  const s = { r, last: '', alts: [], done: false, heard: false };
+  s.finish = (silent, reason) => {
+    if (s.done) return;
+    s.done = true;
+    clearTimeout(s.sil); clearTimeout(s.max); clearTimeout(s.noRes);
+    if (session === s) session = null;
+    if (r.active) {
+      try { r.stop(); } catch (e) { /* ya parado */ }
+      setTimeout(() => { if (r.active && !session) { try { r.abort(); } catch (e) { /* */ } r.active = false; if (recog === r) recog = null; } }, 1500);
+    }
+    if (!silent) onDone(s.last.trim(), s.alts, reason);
   };
-  const maxT = setTimeout(finish, 12000);
-  r.onresult = (e) => {
+  s.result = (e) => {
     let txt = '';
     for (let i = 0; i < e.results.length; i++) txt += e.results[i][0].transcript;
     const res = e.results[e.results.length - 1];
-    last = txt;
-    alts = Array.from(res).map((x) => x.transcript);
+    s.heard = true;
+    s.last = txt;
+    s.alts = Array.from(res).map((x) => x.transcript);
     onText(txt);
-    clearTimeout(silence);
-    if (res.isFinal) finish(); else silence = setTimeout(finish, 1400);
+    clearTimeout(s.sil);
+    if (res.isFinal) s.finish(); else s.sil = setTimeout(() => s.finish(), 1400);
   };
-  r.onerror = (e) => {
+  s.error = (e) => {
     if (e.error === 'not-allowed' || e.error === 'service-not-allowed') toast('Permite el micrófono o usa el dictado del teclado');
     else if (e.error === 'no-speech') toast('No te he oído. Prueba otra vez.');
-    finish();
+    s.finish();
   };
-  r.onend = finish;
-  try { r.start(); }
-  catch (err) { setTimeout(() => { try { r.start(); } catch (e2) { finish(); } }, 350); }
+  const go = (n) => {
+    if (s.done) return;
+    r.lang = LANG[lang].bcp;
+    try {
+      session = s;
+      r.start();
+      r.active = true;
+      s.max = setTimeout(() => s.finish(), 12000);
+      s.noRes = setTimeout(() => {
+        if (s.heard) return;
+        if (recog === r) recog = null;          // la próxima vez, instancia nueva
+        toast('El micrófono no responde: usa el del teclado');
+        s.finish(false, 'nores');
+      }, 6000);
+    } catch (err) {
+      session = null;
+      try { r.abort(); } catch (e) { /* */ }
+      r.active = false;
+      if (n < 2) setTimeout(() => go(n + 1), 400);
+      else { if (recog === r) recog = null; s.finish(false, 'nores'); }
+    }
+  };
+  if (r.active) { try { r.abort(); } catch (e) { /* */ } r.active = false; setTimeout(() => go(0), 300); }
+  else go(0);
   return true;
 }
-function stopListening() { if (recog) { try { recog.stop(); } catch (e) { /* ya parado */ } } }
+function stopListening() { if (session) session.finish(); }
 
 // ---------- pestañas ----------
 function showTab(name) {
@@ -304,9 +339,10 @@ trInput.addEventListener('keydown', (e) => {
 $('trMic').addEventListener('click', () => {
   const mic = $('trMic');
   if (mic.classList.contains('live')) { stopListening(); return; }
-  const ok = listen(state.from, (txt) => { trInput.value = txt; autoSize(); }, (heard) => {
+  const ok = listen(state.from, (txt) => { trInput.value = txt; autoSize(); }, (heard, alts, reason) => {
     mic.classList.remove('live');
     if (heard) { trInput.value = heard; autoSize(); submit(); }
+    else if (reason === 'nores') trInput.focus();
   });
   if (ok) mic.classList.add('live');
   else { toast('Usa el micrófono del teclado para dictar'); trInput.focus(); }
@@ -540,7 +576,7 @@ const VERB_LIST = Object.keys(VERBS).sort();
 
 vbInput.addEventListener('input', renderVbSuggest);
 vbInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); vbInput.blur(); showVerb(vbInput.value); } });
-vbInput.addEventListener('search', () => { if (!vbInput.value) { $('vbOut').innerHTML = ''; $('vbEmpty').hidden = false; } });
+vbInput.addEventListener('search', () => { if (!vbInput.value) { $('vbOut').innerHTML = ''; $('vbHead').innerHTML = ''; $('vbEmpty').hidden = false; } });
 function renderVbSuggest() {
   const v = fold(vbInput.value);
   const ul = $('vbSuggest');
@@ -588,6 +624,7 @@ function showVerb(input) {
   $('vbSuggest').innerHTML = '';
   $('vbEmpty').hidden = true;
   const out = $('vbOut');
+  $('vbHead').innerHTML = '';
   if (!r || r.error) { out.innerHTML = `<div class="card vb-warn">${esc(r ? r.error : 'Escribe un verbo.')}</div>`; return; }
   const { t, refl, known, input: name } = r;
   const reg = ItConj.regular(r.inf, t.pres[0].endsWith('isco'));
@@ -603,15 +640,17 @@ function showVerb(input) {
     }
     return `<div class="card tense"><h3>${label}<small>${sub}</small></h3><table>${rows}</table></div>`;
   };
-  out.innerHTML =
-    `<div class="card"><div class="vb-head"><div class="grow"><h2>${esc(name)}</h2><div class="es">${esc(es.slice(0, 4).join(', '))}</div></div>` +
+  // cabecera fija arriba (verbo, significado, participio…); solo se desplazan los tiempos
+  $('vbHead').innerHTML =
+    `<div class="card vb-card"><div class="vb-head"><div class="grow"><h2>${esc(name)}</h2><div class="es">${esc(es.slice(0, 4).join(', '))}</div></div>` +
     `<button class="icon" id="vbSpeak" aria-label="Escuchar">${ICON('speaker')}</button><button class="icon star${fav ? ' on' : ''}" id="vbStar" aria-label="Favorito">${ICON(fav ? 'star-fill' : 'star')}</button></div>` +
     (r.note ? `<div class="note">${esc(r.note)}</div>` : '') +
     `<div class="vb-meta"><div><span>Participio</span><b class="${known && reg && reg.part !== t.part ? 'irr' : ''}">${esc(t.part)}</b></div>` +
     `<div><span>Gerundio</span>${esc(t.ger)}</div><div><span>Auxiliar</span>${t.aux}${t.aux2 ? ` / ${t.aux2}` : ''}</div></div>` +
     (known ? '' : `<div class="vb-warn">No está en mi lista de verbos: conjugación regular estimada.</div>`) +
     `<a class="link vb-link" target="_blank" rel="noopener" href="https://www.wordreference.com/conj/itverbs.aspx?v=${encodeURIComponent(r.inf)}">Conjugación en WordReference</a>` +
-    `</div>` +
+    `</div>`;
+  out.innerHTML =
     `<div class="vb-grid">${TENSE_INFO.map(([k, a, b]) => table(k, a, b)).join('')}</div>`;
   $('vbSpeak').addEventListener('click', () => speak(name, 'it'));
   $('vbStar').addEventListener('click', () => {
@@ -629,7 +668,7 @@ function showVerb(input) {
 // ================= FAVORITOS =================
 let openRow = null;
 onSeg($('fvSort'), (v) => { state.fvSort = v; save(); renderFavs(); });
-onSeg($('fvDir'), (v) => { state.fvDir = v; save(); renderFavs(); });
+onSeg($('fvDir'), (v) => { state.fvDir = v; state.fvDirSet = true; save(); renderFavs(); });
 $('fvSearch').addEventListener('input', renderFavs);
 
 // Pareja [palabra, traducción] según la dirección elegida (ES → IT pone primero el español)
@@ -841,11 +880,12 @@ $('exMic').addEventListener('click', () => {
   if ($('exMic').classList.contains('live')) { stopListening(); return; }
   const it = run.items[run.i];
   const q = run.i;
-  const ok = listen(other(it.from), (txt) => { $('exAnswer').value = txt; }, (heard, alts) => {
+  const ok = listen(other(it.from), (txt) => { $('exAnswer').value = txt; }, (heard, alts, reason) => {
     $('exMic').classList.remove('live');
     $('exMicLabel').textContent = 'Toca y habla';
     if (!run || run.i !== q || !$('exNext').hidden) return;
     if (heard) { $('exAnswer').value = heard; run.altHeard = alts; checkAnswer(); }
+    else if (reason === 'nores') $('exAnswer').focus();
   });
   if (ok) { $('exMic').classList.add('live'); $('exMicLabel').textContent = 'Escuchando…'; }
   else { $('exAnswer').focus(); toast('Toca el micrófono del teclado y habla'); }

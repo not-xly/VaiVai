@@ -1,6 +1,6 @@
 // Service worker: guarda la app (y el diccionario) para usarla sin conexión.
 // Red primero con límite de tiempo; si no hay red o tarda, usa la copia guardada.
-const CACHE_VERSION = 'vaivai-v6';
+const CACHE_VERSION = 'vaivai-v7';
 const NETWORK_TIMEOUT = 3000;
 const APP_SHELL = [
   './', './index.html', './styles.css', './app.js', './conj.js', './dict.js', './verbs.js',
